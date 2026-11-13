@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Canvas</title>
+<style>
+  :root { --fade: 900ms; }
+  * { box-sizing: border-box; cursor: none !important; }
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; color: #fff;
+    font-family: "Inter", "Cantarell", system-ui, sans-serif; -webkit-font-smoothing: antialiased; user-select: none; }
+  #stage { position: fixed; inset: 0; }
+  .layer { position: absolute; inset: 0; opacity: 0; transition: opacity var(--fade) ease; overflow: hidden; }
+  .layer.on { opacity: 1; }
+  .layer video, .layer img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  /* No Canvas: the square cover fills the portrait screen and pans slowly across the cropped art */
+  .layer.cover img { animation: drift 48s ease-in-out infinite alternate; transform: scale(1.04); filter: saturate(1.05); }
+  @keyframes drift { from { object-position: 0% 50%; } to { object-position: 100% 50%; } }
+  #shade { position: fixed; left: 0; right: 0; bottom: 0; height: 42vh; pointer-events: none;
+    background: linear-gradient(to bottom, rgba(0,0,0,0) 0%, rgba(0,0,0,.35) 45%, rgba(0,0,0,.78) 100%); }
+  #info { position: fixed; left: 6vw; right: 6vw; bottom: 6.5vh; transition: opacity 400ms ease; }
+  #title { font-size: clamp(22px, 3.6vw, 46px); font-weight: 700; letter-spacing: -.01em; line-height: 1.15;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-shadow: 0 1px 12px rgba(0,0,0,.35); }
+  #artist { margin-top: .35em; font-size: clamp(15px, 2.4vw, 30px); opacity: .72; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #bar { margin-top: 2.6vh; height: 3px; border-radius: 2px; background: rgba(255,255,255,.28); overflow: hidden; }
+  #fill { height: 100%; width: 0; background: #fff; border-radius: 2px; }
+  body.idle #info, body.idle #shade { opacity: 0; }
+</style>
+</head>
+<body class="idle">
+<div id="stage"></div>
+<div id="shade"></div>
+<div id="info"><div id="title"></div><div id="artist"></div><div id="bar"><div id="fill"></div></div></div>
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const stage = $("stage");
+let st = {}, recvAt = 0, layer = null, layerKey = null;
+
+// ---------- layers (crossfade) ----------
+function show(key, make) {
+  if (key === layerKey) return;
+  layerKey = key;
+  const old = layer;
+  layer = key ? make() : null;
+  if (layer) {
+    stage.appendChild(layer);
+    const reveal = () => requestAnimationFrame(() => layer && layer.classList.add("on"));
+    const media = layer.firstChild;
+    if (media.tagName === "VIDEO") media.addEventListener("loadeddata", reveal, { once: true });
+    else if (media.complete) reveal(); else media.addEventListener("load", reveal, { once: true });
+    media.addEventListener("error", () => onMediaError(media, key), { once: true });
+  }
+  if (old) {
+    const drop = () => { const v = old.querySelector("video"); if (v) { v.pause(); v.removeAttribute("src"); v.load(); } old.remove(); };
+    if (layer) setTimeout(() => { old.classList.remove("on"); setTimeout(drop, 1000); }, 450);
+    else { old.classList.remove("on"); setTimeout(drop, 1000); }
+  }
+}
+function videoLayer(src) {
+  const d = document.createElement("div"); d.className = "layer canvas";
+  const v = document.createElement("video");
+  Object.assign(v, { muted: true, loop: true, playsInline: true, autoplay: st.playing, preload: "auto", src });
+  v.disablePictureInPicture = true;
+  d.appendChild(v);
+  return d;
+}
+function coverLayer(src) {
+  const d = document.createElement("div"); d.className = "layer cover";
+  const i = new Image(); i.decoding = "async"; i.src = src;
+  d.appendChild(i);
+  return d;
+}
+const failed = new Map(); // layer key -> error count
+const ok = key => (failed.get(key) || 0) < (key.startsWith("v:") ? 4 : 1);
+function onMediaError(el, key) {
+  if (key !== layerKey) return;
+  const n = (failed.get(key) || 0) + 1; failed.set(key, n);
+  layerKey = null;  // let render() rebuild: retries a video (decoder hiccup) up to 3 times, then falls back to the cover
+  setTimeout(render, ok(key) ? 1000 * n : 0);
+}
+
+// ---------- render ----------
+function render() {
+  document.body.classList.toggle("idle", !st.enabled || !st.id);
+  if (!st.enabled || !st.id) return show(null);
+  $("title").textContent = st.title || "";
+  $("artist").textContent = st.artist || "";
+  const vk = "v:" + st.canvas, ck = "c:" + st.cover;
+  if (st.canvas && st.canvas !== "pending" && ok(vk)) show(vk, () => videoLayer(st.canvas));
+  else if (st.canvas === "pending" && layerKey === "v:/canvas/" + st.id + ".webm") {}  // same track re-enabled: keep the clip
+  else if (st.cover && ok(ck)) show(ck, () => coverLayer(st.cover));
+  else show(null);
+  syncPlay();
+}
+function syncPlay() {
+  const v = layer && layer.querySelector("video");
+  if (!v) return;
+  if (st.playing) v.play().catch(() => {}); else v.pause();
+}
+function position() {
+  if (!st.duration) return 0;
+  const p = st.position + (st.playing ? (st.age || 0) + performance.now() - recvAt : 0);
+  return Math.min(p, st.duration);
+}
+(function tick() {
+  $("fill").style.width = (st.duration ? position() / st.duration * 100 : 0).toFixed(3) + "%";
+  requestAnimationFrame(tick);
+})();
+
+// ---------- events (EventSource reconnects by itself; recreate it if it gives up) ----------
+let es;
+function connect() {
+  es = new EventSource("/events");
+  es.onmessage = e => {
+    try { st = JSON.parse(e.data); } catch { return; }
+    recvAt = performance.now();
+    render();
+  };
+  es.onerror = () => { if (es.readyState === EventSource.CLOSED) setTimeout(connect, 3000); };
+}
+connect();
+window.CanvasView = { get state() { return st; }, get layer() { return layerKey; }, position };
+</script>
+</body>
+</html>
