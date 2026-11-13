@@ -1,0 +1,14 @@
+[Unit]
+Description=Spotify Canvas full-screen display (Brave kiosk on one monitor)
+After=graphical-session.target spotify-canvas.service
+PartOf=graphical-session.target
+Wants=spotify-canvas.service
+
+[Service]
+EnvironmentFile=-%h/.config/spotify-canvas/kiosk.env
+ExecStart=%h/.local/bin/spotify-canvas-kiosk
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=graphical-session.target

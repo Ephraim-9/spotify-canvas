@@ -1,0 +1,164 @@
+#!/usr/bin/python3 -I
+"""Full-screen Spotify Canvas display on one monitor, as a Brave kiosk window, kept in place.
+
+  spotify-canvas-kiosk             run in the foreground (what spotify-canvas-kiosk.service does)
+  spotify-canvas-kiosk geometry    print the target monitor's logical x y w h
+
+Env (set in ~/.config/spotify-canvas/kiosk.env for the service):
+  CANVAS_MONITOR=DP-1           connector name, e.g. HDMI-2 (see `gnome-monitor-config list` or Settings > Displays)
+  CANVAS_BROWSER=brave-browser  any Chromium-based browser
+  CANVAS_KIOSK_FLAGS=...        extra browser flags (e.g. a temporary --remote-debugging-port)
+
+The browser runs under Xwayland (Wayland clients cannot choose their position): the window is created at the
+monitor's origin and --kiosk fullscreens it there. Every few seconds the window's X geometry is checked; if it was
+moved off the monitor, closed, or crashed, or the monitor came back after being unplugged, the browser is relaunched.
+"""
+import ctypes, ctypes.util, os, re, shlex, signal, subprocess, sys, time, urllib.request
+
+MONITOR = os.environ.get("CANVAS_MONITOR", "DP-1")
+BROWSER = os.environ.get("CANVAS_BROWSER", "brave-browser")
+PROFILE = os.path.expanduser(os.environ.get("CANVAS_KIOSK_PROFILE", "~/.local/share/spotify-canvas/kiosk-profile"))
+PORT = os.environ.get("CANVAS_PORT", "47800")
+WM_CLASS = "spotify-canvas-kiosk"
+CHECK, GRACE = 5, 20  # seconds between checks; time a new window gets to settle
+
+
+def log(*a):
+    print(*a, flush=True)
+
+
+def geometry():
+    """Logical (x, y, w, h) of MONITOR from Mutter, or None if it is not active."""
+    try:
+        s = subprocess.run(["gdbus", "call", "--session", "--dest", "org.gnome.Mutter.DisplayConfig", "--object-path",
+                            "/org/gnome/Mutter/DisplayConfig", "--method", "org.gnome.Mutter.DisplayConfig.GetCurrentState"],
+                           capture_output=True, text=True, timeout=10).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    q = re.escape(repr(MONITOR))
+    # physical monitor: ((connector, ...), [modes], {props}) up to the next one -> its current mode size
+    i = s.find("((" + repr(MONITOR) + ",")
+    j = s.find("(('", i + 2)
+    cur = i >= 0 and re.search(r"\('[^']+', (\d+), (\d+), [\d.]+, [\d.]+, \[[^\]]*\], \{[^}]*'is-current': <true>",
+                               s[i:j if j > 0 else len(s)])
+    # logical monitor: (x, y, scale, transform, primary, [(connector, ...)], ...)
+    lm = re.search(r"\((-?\d+), (-?\d+), ([\d.]+), (?:uint32 )?(\d+), (?:true|false), \[\(" + q, s)
+    if not (cur and lm):
+        return None
+    w, h = int(cur.group(1)), int(cur.group(2))
+    if int(lm.group(4)) % 2:  # rotated 90/270 degrees
+        w, h = h, w
+    mode = re.search(r"'layout-mode': <uint32 (\d)>", s)
+    scale = float(lm.group(3)) if not mode or mode.group(1) == "1" else 1.0  # 1 = logical layout
+    return int(lm.group(1)), int(lm.group(2)), round(w / scale), round(h / scale)
+
+
+class X11:
+    """Just enough libX11 to find our window and read its absolute geometry."""
+    def __init__(self):
+        self.x = x = ctypes.CDLL(ctypes.util.find_library("X11"))
+        x.XOpenDisplay.restype = ctypes.c_void_p
+        x.XDefaultRootWindow.restype = ctypes.c_ulong
+        x.XDefaultRootWindow.argtypes = [ctypes.c_void_p]
+        x.XInternAtom.restype = ctypes.c_ulong
+        x.XInternAtom.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
+        x.XGetWindowProperty.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_long, ctypes.c_long,
+                                         ctypes.c_int, ctypes.c_ulong, ctypes.POINTER(ctypes.c_ulong), ctypes.POINTER(ctypes.c_int),
+                                         ctypes.POINTER(ctypes.c_ulong), ctypes.POINTER(ctypes.c_ulong), ctypes.POINTER(ctypes.c_void_p)]
+        x.XGetGeometry.argtypes = [ctypes.c_void_p, ctypes.c_ulong] + [ctypes.c_void_p] * 7
+        x.XTranslateCoordinates.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_int, ctypes.c_int] + [ctypes.c_void_p] * 3
+        x.XFree.argtypes = [ctypes.c_void_p]
+        x.XSync.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        self.d = x.XOpenDisplay(None)
+        if not self.d:
+            raise OSError("cannot open X display " + os.environ.get("DISPLAY", "(unset)"))
+        self.root = x.XDefaultRootWindow(self.d)
+
+    def prop(self, win, name, typ):
+        t, f, n, rest, data = ctypes.c_ulong(), ctypes.c_int(), ctypes.c_ulong(), ctypes.c_ulong(), ctypes.c_void_p()
+        if self.x.XGetWindowProperty(self.d, win, self.x.XInternAtom(self.d, name, 0), 0, 4096, 0, typ, ctypes.byref(t),
+                                     ctypes.byref(f), ctypes.byref(n), ctypes.byref(rest), ctypes.byref(data)) != 0 or not data:
+            return None
+        try:
+            if f.value == 8:
+                return ctypes.string_at(data, n.value)
+            return list((ctypes.c_ulong * n.value).from_address(data.value))  # format 32 is stored as longs
+        finally:
+            self.x.XFree(data)
+
+    def kiosk_windows(self):
+        self.x.XSync(self.d, 0)
+        out = []
+        for w in self.prop(self.root, b"_NET_CLIENT_LIST", 33) or []:  # 33 = XA_WINDOW
+            cls = (self.prop(w, b"WM_CLASS", 31) or b"").split(b"\0")  # 31 = XA_STRING
+            if WM_CLASS.encode() in cls:
+                out.append(self.geom(w))
+        return out
+
+    def geom(self, w):
+        r, c = ctypes.c_ulong(), ctypes.c_ulong()
+        i = [ctypes.c_int() for _ in range(4)]
+        u = [ctypes.c_uint() for _ in range(4)]
+        self.x.XGetGeometry(self.d, w, ctypes.byref(r), ctypes.byref(i[0]), ctypes.byref(i[1]), *map(ctypes.byref, u))
+        self.x.XTranslateCoordinates(self.d, w, self.root, 0, 0, ctypes.byref(i[2]), ctypes.byref(i[3]), ctypes.byref(c))
+        return i[2].value, i[3].value, u[0].value, u[1].value
+
+
+def launch(g):
+    x, y, w, h = g
+    os.makedirs(PROFILE, exist_ok=True)
+    cmd = [BROWSER, "--user-data-dir=" + PROFILE, "--ozone-platform=x11", "--class=" + WM_CLASS,
+           "--window-position=%d,%d" % (x, y), "--window-size=%d,%d" % (w, h), "--kiosk", "http://127.0.0.1:%s/view" % PORT,
+           "--no-first-run", "--no-default-browser-check", "--noerrdialogs", "--disable-session-crashed-bubble",
+           "--password-store=basic", "--autoplay-policy=no-user-gesture-required", "--disable-accelerated-video-decode",
+           "--disable-features=Translate,MediaRouter,GlobalMediaControls"] + shlex.split(os.environ.get("CANVAS_KIOSK_FLAGS", ""))
+    log("launch on %s at %s" % (MONITOR, g))
+    return subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                            start_new_session=True)
+
+
+def kill(p):
+    if p and p.poll() is None:
+        os.killpg(p.pid, signal.SIGTERM)
+        try:
+            p.wait(10)
+        except subprocess.TimeoutExpired:
+            os.killpg(p.pid, signal.SIGKILL)
+            p.wait()
+
+
+def main():
+    if sys.argv[1:] == ["geometry"]:
+        g = geometry()
+        print(*g) if g else sys.exit("%s is not active" % MONITOR)
+        return
+    for _ in range(60):  # at login the service may still be starting; the page also reconnects on its own
+        try:
+            urllib.request.urlopen("http://127.0.0.1:%s/health" % PORT, timeout=2)
+            break
+        except OSError:
+            time.sleep(1)
+    xl, p, target, since = X11(), None, None, 0.0
+    signal.signal(signal.SIGTERM, lambda *_: (kill(p), sys.exit(0)))
+    # a stale kiosk from an earlier run would hold the profile lock and swallow our launch
+    subprocess.run(["pkill", "-u", str(os.getuid()), "-f", "--", "--user-data-dir=" + PROFILE + "( |$)"])
+    while True:
+        g = geometry()
+        if g != target:  # monitor appeared, disappeared or changed mode
+            kill(p)
+            p, target, since = (launch(g) if g else None), g, time.time()
+            if not g:
+                log("%s not active, waiting" % MONITOR)
+        elif g:
+            wins = xl.kiosk_windows()
+            settled = time.time() - since > GRACE
+            if p.poll() is not None or (settled and wins != [g]):
+                log("kiosk %s (windows %s), relaunching" % ("exited" if p.poll() is not None else "displaced", wins))
+                kill(p)
+                time.sleep(2)
+                p, since = launch(g), time.time()
+        time.sleep(CHECK)
+
+
+if __name__ == "__main__":
+    main()
