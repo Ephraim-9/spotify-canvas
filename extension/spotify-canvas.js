@@ -28,7 +28,7 @@
   style.textContent = `
   .spc-video{display:block;width:100%;height:100%;object-fit:cover;pointer-events:none}
   .spc-sidebar{position:relative;width:100%;aspect-ratio:9/16;border-radius:8px;overflow:hidden;background:#000;margin-bottom:16px}
-  .spc-sidebar-on [data-testid="cover-drop-target"]{display:none!important}
+  .spc-sidebar-on [data-testid="cover-drop-target"],.spc-sidebar-on [data-testid="track-visual-enhancement"]{display:none!important}
   #spc-fs{position:fixed;z-index:30;overflow:hidden;background:#000;display:none}
   #spc-fs.spc-show{display:block}
   #spc-fs .spc-bg{position:absolute;inset:-60px;width:calc(100% + 120px);height:calc(100% + 120px);object-fit:cover;filter:blur(48px) brightness(.4) saturate(1.2)}
@@ -98,7 +98,7 @@
 
   function mountSidebar() {
     const npv = document.querySelector('[data-testid="NPV_Panel_OpenDiv"]');
-    const cover = npv?.querySelector('[data-testid="cover-drop-target"]');
+    const cover = npv?.querySelector('[data-testid="cover-drop-target"], [data-testid="track-visual-enhancement"]'); // slot name differs by client build
     if (!cover) return false;
     if (side.parentElement !== cover.parentElement || side.nextSibling !== cover) cover.parentElement.insertBefore(side, cover);
     npv.classList.add("spc-sidebar-on");
