@@ -35,13 +35,12 @@
   #spc-fs .spc-fg{position:absolute;top:0;left:50%;height:100%;width:auto;aspect-ratio:9/16;transform:translateX(-50%);object-fit:cover;box-shadow:0 0 60px rgba(0,0,0,.6)}
   #spc-fs img.spc-fg{aspect-ratio:1;height:auto;width:min(60%,70vh);top:50%;transform:translate(-50%,-50%);border-radius:8px}
   #spc-fs .spc-close{position:absolute;top:12px;right:12px;z-index:2;width:32px;height:32px;border:0;border-radius:50%;background:rgba(0,0,0,.55);color:#fff;font-size:18px;cursor:pointer}
-  #spc-amb{position:fixed;inset:-80px;z-index:-1;pointer-events:none;display:none}
-  #spc-amb .spc-video{filter:blur(56px) brightness(.35) saturate(1.3)}
+  #spc-amb{position:fixed;inset:-80px;z-index:0;pointer-events:none;display:none}
+  #spc-amb .spc-video{filter:blur(48px) brightness(.55) saturate(1.3)}
   body.spc-ambient #spc-amb{display:block}
   body.spc-ambient,body.spc-ambient .Root,body.spc-ambient .Root__top-container{background:transparent!important}
   body.spc-ambient .Root__main-view,body.spc-ambient .Root__nav-bar,body.spc-ambient .Root__right-sidebar,
-  body.spc-ambient .Root__now-playing-bar,body.spc-ambient .main-view-container{background-color:rgba(0,0,0,.35)!important}
-  body.spc-ambient{background-color:#000!important}`;
+  body.spc-ambient .Root__now-playing-bar,body.spc-ambient .main-view-container{background-color:rgba(0,0,0,.35)!important}`;
   document.head.appendChild(style);
 
   // ---------- elements ----------
@@ -115,6 +114,34 @@
     Object.assign(fs.style, { left: r.left + "px", top: r.top + "px", width: r.width + "px", height: r.height + "px" });
   }
 
+  // Ambient: themes paint opaque full-window layers (e.g. a gradient on the top container, often !important)
+  // that hide #spc-amb. Find large opaque layers under a grid of points and clear them with inline !important.
+  const cleared = new Map(); // element -> previous inline background
+  const alpha = c => { // computed colors: rgb(..), rgba(.., a), color(srgb .. / a), transparent
+    if (c === "transparent") return 0;
+    if (!/^rgba|\//.test(c)) return 1;
+    const v = c.match(/[\d.]+%?(?=\s*\)$)/)?.[0] || "1";
+    return parseFloat(v) / (v.endsWith("%") ? 100 : 1);
+  };
+  function clearBackdrops(on) {
+    if (!on) {
+      cleared.forEach((v, e) => v ? e.style.setProperty("background", v) : e.style.removeProperty("background"));
+      cleared.clear();
+      return;
+    }
+    const W = innerWidth, H = innerHeight;
+    for (let x = .05; x < 1; x += .15) for (let y = .05; y < 1; y += .15)
+      for (const e of document.elementsFromPoint(x * W, y * H)) {
+        if (e === document.documentElement || e === document.body || cleared.has(e)) continue;
+        const r = e.getBoundingClientRect();
+        if (r.width * r.height < .08 * W * H) continue;
+        const c = getComputedStyle(e);
+        if (!/gradient/.test(c.backgroundImage) && alpha(c.backgroundColor) < .5) continue;
+        cleared.set(e, e.style.getPropertyValue("background"));
+        e.style.setProperty("background", "transparent", "important");
+      }
+  }
+
   // ---------- render ----------
   function render() {
     try {
@@ -128,20 +155,17 @@
       fs.classList.toggle("spc-show", fsOn);
       if (fsOn) {
         placeFs();
-        if (src) {
-          if (fsImgFg.isConnected) { fsImgBg.remove(); fsImgFg.remove(); fs.prepend(fsBg); fsBg.after(fsFg); }
-          setSrc(fsBg, src); setSrc(fsFg, src);
-        } else {
-          setSrc(fsBg, null); setSrc(fsFg, null);
-          fsBg.remove(); fsFg.remove();
-          if (st.cover) { fsImgBg.src = fsImgFg.src = st.cover; fs.prepend(fsImgBg); fsImgBg.after(fsImgFg); }
-          else { fsImgBg.remove(); fsImgFg.remove(); }
-        }
+        if (!src && st.cover) fsImgBg.src = fsImgFg.src = st.cover;
+        const want = src ? [fsBg, fsFg] : st.cover ? [fsImgBg, fsImgFg] : [];
+        for (const el of [fsBg, fsFg, fsImgBg, fsImgFg]) if (!want.includes(el)) el.remove();
+        if (want.some(el => el.parentElement !== fs)) fs.prepend(...want);
+        setSrc(fsBg, src); setSrc(fsFg, src);
       } else { setSrc(fsBg, null); setSrc(fsFg, null); }
       // ambient
       const ambOn = L === "ambient" && !!src;
       document.body.classList.toggle("spc-ambient", ambOn);
       setSrc(ambV, ambOn ? src : null);
+      clearBackdrops(ambOn);
       syncPlay();
       updateTopbar();
     } catch (e) { console.warn("[spotify-canvas] render", e); }
@@ -177,6 +201,7 @@
   async function onSong() {
     const tok = ++st.token;
     const id = trackId();
+    if (id !== st.id) retries = 0, relooked = false;
     st.id = id;
     st.cover = S.Player.data?.item?.metadata?.image_xlarge_url || S.Player.data?.item?.metadata?.image_large_url || null;
     if (st.cover?.startsWith("spotify:image:")) st.cover = "https://i.scdn.co/image/" + st.cover.slice(14);
@@ -229,7 +254,10 @@
   function updateTopbar() { try { topbar.active = cfg.enabled && cfg.layout === "fullscreen" && cfg.fsOpen; } catch {} }
 
   // ---------- wiring ----------
-  S.Player.addEventListener("songchange", () => { retries = 0; relooked = false; onSong(); });
+  S.Player.addEventListener("songchange", () => {
+    if (trackId() === st.id && st.src) return; // already picked up by the interval below
+    onSong();
+  });
   S.Player.addEventListener("onplaypause", syncPlay);
   document.addEventListener("visibilitychange", syncPlay);
   document.addEventListener("keydown", e => {
@@ -238,7 +266,10 @@
   window.addEventListener("resize", () => fs.classList.contains("spc-show") && placeFs());
   // React re-renders the NPV / main view: re-attach cheaply instead of observing the whole DOM
   setInterval(() => {
-    if (!cfg.enabled || !st.src) return;
+    if (!cfg.enabled) return;
+    if (trackId() !== st.id) return onSong(); // Player.data is empty at startup and no songchange follows
+    if (!st.src) return;
+    if (document.body.classList.contains("spc-ambient")) clearBackdrops(true);
     if (cfg.layout === "sidebar" && (!side.isConnected || !side.nextSibling)) render();
     else if (cfg.layout === "fullscreen" && cfg.fsOpen) placeFs();
   }, 1500);
