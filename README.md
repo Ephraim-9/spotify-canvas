@@ -68,7 +68,7 @@ Pre-install copies of `index.html`, `config-xpui.ini` and the launcher wrapper a
   - **Enabled**: master switch.
   - **Layout: Sidebar**: a 9:16 clip replaces the cover in the Now Playing View (the NPV must be open). One decoder.
   - **Layout: Fullscreen** (default): a sharp 9:16 clip centred over a blurred copy, covering the main view. Two decoders. Close it with **Esc** or the ✕ button.
-  - **Layout: Ambient**: a blurred, darkened clip behind the whole UI. One decoder.
+  - **Layout: Ambient**: a blurred, darkened clip behind the whole UI. One decoder. While it is on, large opaque theme backdrops (e.g. StarryNight's top gradient) are made transparent inline so the clip shows through, and restored when you leave ambient.
 - **Topbar "Canvas" button**: switches to fullscreen, or toggles the fullscreen overlay.
 - With no Canvas, fullscreen shows the blurred cover art. The other layouts show nothing, and the normal cover stays.
 - Video follows playback: it pauses when Spotify pauses or the window is hidden. Inactive layouts hold no `src`, so they hold no decoder.
@@ -112,4 +112,5 @@ systemctl --user is-active spotify-canvas
 - **Upstream site**: canvasdownloader.com can change its HTML, rate-limit, or disappear. Then lookups return 502 or 404 and the UI falls back to the normal cover. Cached clips keep working.
 - **Region availability**: some tracks, such as several of The Weeknd's top tracks, have no Canvas on the site. Others are unplayable in PK, and Spotify skips them.
 - **Client DOM changes**: the sidebar mounts at `cover-drop-target` or `track-visual-enhancement` in the NPV. A new client may rename these. The other layouts only need `.main-view-container`.
+- **Ambient backdrop clearing**: a heuristic samples a 7×7 grid with `elementsFromPoint` every 1.5 s and clears opaque or gradient backgrounds on elements covering ≥8% of the window. A theme change can add layers it misses (e.g. `::before` backgrounds) or clear one it should not.
 - **Launcher flags**: launching `/usr/lib64/spotify-client/spotify` directly, without the wrapper flags, brings back the GPU-process crash.
