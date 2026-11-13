@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
-"""Local Spotify Canvas converter for the spotify-canvas Spicetify extension.
+"""Local Spotify Canvas service: converter + now-playing hub for the full-screen Canvas display.
 
+POST /nowplaying            now-playing state from the Spicetify extension (text/plain JSON body)
+GET /events                 SSE stream of the current state, as JSON "data:" events
+GET /view                   the full-screen display page (view.html next to this file)
 GET /lookup/<trackId>       200 {"ok":true,"width":..,"height":..} once the WebM is cached
                             404 {"ok":false,"reason":"no-canvas"} (negative result, cached)
                             502 {"ok":false,"reason":"error"} (upstream/ffmpeg failure, short back-off)
@@ -22,6 +25,9 @@ SITE_GAP = 2.0                 # min seconds between canvasdownloader requests
 UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130 Safari/537.36"
 TRACK_RE = re.compile(r"^[A-Za-z0-9]{22}$")
 MP4_RE = re.compile(r"https://canvaz\.scdn\.co/[^\"' <>]+\.mp4")
+
+VIEW = os.path.join(os.path.dirname(os.path.abspath(__file__)), "view.html")
+MAX_BODY = 8192
 
 os.makedirs(CACHE, exist_ok=True)
 _locks, _locks_guard, _site_lock = {}, threading.Lock(), threading.Lock()
@@ -143,6 +149,54 @@ def resolve(tid):
     return (200 if meta["ok"] else 404 if meta["reason"] == "no-canvas" else 502), meta
 
 
+# ---------- now playing hub ----------
+_state = {"id": None, "enabled": False, "canvas": None}
+_cond = threading.Condition()
+_version = [0]
+
+
+def publish(**changes):
+    with _cond:
+        _state.update(changes)
+        _state["t"] = time.time()
+        _version[0] += 1
+        _cond.notify_all()
+
+
+def snapshot():
+    with _cond:
+        snap = dict(_state)
+        snap["age"] = int((time.time() - snap.pop("t", time.time())) * 1000)  # ms since the extension reported
+        return _version[0], snap
+
+
+def look_up_for_display(tid):
+    code, _ = resolve(tid)
+    with _cond:
+        if _state["id"] != tid:  # track changed while converting
+            return
+    publish(canvas="/canvas/%s.webm" % tid if code == 200 else None)
+
+
+def on_nowplaying(d):
+    if not d.get("enabled", True):
+        return publish(enabled=False, canvas=None, id=None)
+    tid = d.get("id") if isinstance(d.get("id"), str) and TRACK_RE.match(d.get("id")) else None
+    s = lambda k, n=300: str(d.get(k) or "")[:n]
+    num = lambda k: max(0, int(d.get(k) or 0)) if isinstance(d.get(k), (int, float)) else 0
+    cover = s("cover", 500)
+    fields = dict(enabled=True, title=s("title"), artist=s("artist"),
+                  cover=cover if cover.startswith("https://") else "",
+                  duration=num("duration"), position=num("position"), playing=bool(d.get("playing")))
+    with _cond:
+        changed = tid != _state["id"] or not _state["enabled"]
+    if not changed:
+        return publish(**fields)
+    publish(id=tid, canvas="pending" if tid else None, **fields)
+    if tid:
+        threading.Thread(target=look_up_for_display, args=(tid,), daemon=True).start()
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -163,10 +217,67 @@ class Handler(BaseHTTPRequestHandler):
         self.head(code, "application/json", len(body), [("Cache-Control", "no-store")])
         self.wfile.write(body)
 
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Private-Network", "true")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def do_POST(self):
+        if urllib.parse.urlparse(self.path).path != "/nowplaying":
+            return self.send_json(404, {"ok": False})
+        n = int(self.headers.get("Content-Length") or 0)
+        if not 0 < n <= MAX_BODY:
+            return self.send_json(413, {"ok": False})
+        try:
+            d = json.loads(self.rfile.read(n))
+            if not isinstance(d, dict):
+                raise ValueError
+        except ValueError:
+            return self.send_json(400, {"ok": False, "reason": "bad-json"})
+        on_nowplaying(d)
+        self.send_json(200, {"ok": True})
+
+    def events(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.close_connection = True
+        seen = -1
+        try:
+            self.wfile.write(b"retry: 2000\n\n")
+            while True:
+                with _cond:
+                    _cond.wait_for(lambda: _version[0] != seen, timeout=15)
+                v, snap = snapshot()
+                if v == seen:
+                    self.wfile.write(b": ping\n\n")  # keep-alive, also detects a closed page
+                else:
+                    seen = v
+                    self.wfile.write(b"data: " + json.dumps(snap).encode() + b"\n\n")
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
+
     def do_GET(self):
         path = urllib.parse.urlparse(self.path).path
         if path == "/health":
             return self.send_json(200, {"ok": True})
+        if path == "/events":
+            return self.events()
+        if path == "/view":
+            try:
+                with open(VIEW, "rb") as f:
+                    body = f.read()
+            except OSError:
+                return self.send_json(500, {"ok": False, "reason": "no-view"})
+            self.head(200, "text/html; charset=utf-8", len(body), [("Cache-Control", "no-store")])
+            return self.wfile.write(body)
         m = re.fullmatch(r"/(lookup|canvas)/([A-Za-z0-9]+)(\.webm)?", path)
         if not m or not TRACK_RE.match(m.group(2)):
             return self.send_json(400, {"ok": False, "reason": "bad-request"})
