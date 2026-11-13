@@ -189,12 +189,21 @@
     render();
   }
 
+  // MEDIA_ERR_DECODE (3): decoder/GPU process dropped -> reload the same file (max ~3 reloads per track; both fullscreen videos count).
+  // Anything else (e.g. 4: file pruned from cache) -> re-run the lookup once, then give up quietly.
+  let retries = 0, relooked = false;
   function onVideoError(v) {
-    if (!v.getAttribute("src") || !st.id) return;
+    const src = v.getAttribute("src");
+    if (!src || src !== st.src) return;
     console.warn("[spotify-canvas] video error", v.error?.code);
-    mem.delete(st.id); // file may have been pruned: re-run lookup once
-    if (!onVideoError.retried) { onVideoError.retried = true; onSong(); }
-    else { st.src = null; render(); }
+    if (v.error?.code === 3 && retries < 6) {
+      retries++;
+      const tok = st.token;
+      setSrc(v, null);
+      setTimeout(() => { if (tok === st.token) render(); }, 1000 * retries);
+    } else if (!relooked) {
+      relooked = true; mem.delete(st.id); onSong();
+    } else { st.src = null; render(); }
   }
 
   // ---------- settings ----------
@@ -220,7 +229,7 @@
   function updateTopbar() { try { topbar.active = cfg.enabled && cfg.layout === "fullscreen" && cfg.fsOpen; } catch {} }
 
   // ---------- wiring ----------
-  S.Player.addEventListener("songchange", () => { onVideoError.retried = false; onSong(); });
+  S.Player.addEventListener("songchange", () => { retries = 0; relooked = false; onSong(); });
   S.Player.addEventListener("onplaypause", syncPlay);
   document.addEventListener("visibilitychange", syncPlay);
   document.addEventListener("keydown", e => {
