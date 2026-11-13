@@ -1,0 +1,11 @@
+#!/usr/bin/bash
+# Wrapper script for Spotify on Linux/Wayland.
+# --disable-gpu-sandbox: GPU sandbox fix.
+# --disable-accelerated-video-decode: the GPU process segfaults in Mesa's Wayland EGL init
+#   (dri2_initialize_wayland) when it sets up HW video decode; needed by spotify-canvas videos.
+export LD_LIBRARY_PATH="/usr/lib64/spotify-client${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+flags=()
+for f in --disable-gpu-sandbox --disable-accelerated-video-decode; do
+    [[ " $* " == *" $f "* ]] || flags+=("$f")
+done
+exec /usr/lib64/spotify-client/spotify "${flags[@]}" "$@"
