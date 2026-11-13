@@ -36,7 +36,8 @@
   #spc-fs img.spc-fg{aspect-ratio:1;height:auto;width:min(60%,70vh);top:50%;transform:translate(-50%,-50%);border-radius:8px}
   #spc-fs .spc-close{position:absolute;top:12px;right:12px;z-index:2;width:32px;height:32px;border:0;border-radius:50%;background:rgba(0,0,0,.55);color:#fff;font-size:18px;cursor:pointer}
   #spc-amb{position:fixed;inset:-80px;z-index:0;pointer-events:none;display:none}
-  #spc-amb .spc-video{filter:blur(48px) brightness(.55) saturate(1.3)}
+  #spc-amb .spc-video{filter:blur(48px) grayscale(1) sepia(1) hue-rotate(175deg) saturate(1.8) brightness(.6)}
+  #spc-amb::after{content:"";position:absolute;inset:0;background:linear-gradient(#000,rgb(20,43,68));opacity:.55}
   body.spc-ambient #spc-amb{display:block}
   body.spc-ambient,body.spc-ambient .Root,body.spc-ambient .Root__top-container{background:transparent!important}
   body.spc-ambient .Root__main-view,body.spc-ambient .Root__nav-bar,body.spc-ambient .Root__right-sidebar,
