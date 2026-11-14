@@ -1,0 +1,10 @@
+[
+  {
+    "name": "spotify-canvas",
+    "description": "Reports now-playing state to a local service that drives a full-screen Spotify Canvas display on a second monitor. Draws nothing inside Spotify.",
+    "preview": "preview.png",
+    "main": "extension/spotify-canvas.js",
+    "readme": "README.md",
+    "tags": ["canvas", "display", "now-playing"]
+  }
+]
