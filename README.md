@@ -1,57 +1,81 @@
 # spotify-canvas
 
-A full-screen Spotify Canvas display on its own monitor, like Canvas on a phone. The looping clip fills fedora's vertical monitor edge to edge, with a minimal overlay at the bottom: title, artist and a thin progress bar. Nothing is drawn inside Spotify.
+A full-screen Spotify Canvas display for a spare monitor, like Canvas on a phone. The looping clip fills the screen edge to edge, with a minimal overlay at the bottom: title, artist and a thin progress bar. Nothing is drawn inside Spotify.
 
-Spotify doesn't serve Canvas in Pakistan, so the clips come from canvasdownloader.com. A small local service converts them to VP9 WebM.
+<p align="center"><img src="docs/demo.gif" width="360" alt="Canvas display crossfading into a looping clip with title, artist and progress bar"></p>
+
+It works on any desktop Spotify, including regions where Spotify doesn't serve Canvas: the clips come from [canvasdownloader.com](https://canvasdownloader.com), and a small local service converts them to VP9 WebM.
 
 ```
 Spotify + Spicetify extension ──POST /nowplaying──▶ canvas_server.py (127.0.0.1:47800)
   (track, title, artist, cover,                       │ track change → canvasdownloader.com (1 request/track, cached)
    duration, position, playing)                       │ canvaz.scdn.co MP4 ─ffmpeg─▶ VP9 WebM ≤720x1280, no audio
                                                       ▼
-Brave kiosk window on DP-1 ◀── GET /view + GET /events (SSE) + /canvas/<id>.webm
-  (kept there by spotify-canvas-kiosk)
+Any browser window ◀── GET /view + GET /events (SSE) + /canvas/<id>.webm
+  (or a kiosk pinned to one monitor by spotify-canvas-kiosk, GNOME only)
 ```
 
-Target host: `fedora` (GNOME on Wayland, Spotify 1.3.8 rpm in `/usr/lib64/spotify-client`, Spicetify 2.46.7, Brave, user `helliot`). DP-1 is rotated to portrait (1080x1920) at x=0, and HDMI-2 is the primary monitor to its right.
+## Parts
 
-## Files
+| Part | What it does | Needed |
+|---|---|---|
+| `extension/spotify-canvas.js` | Spicetify extension. Reports the playing track to the local service. | Yes |
+| `service/` | Python service (stdlib only) that fetches and converts Canvas clips and serves the display page. | Yes |
+| `kiosk/` | Keeps a full-screen browser window on one monitor. GNOME on Wayland only. | Optional |
+| `launcher/spotify` | Spotify wrapper with GPU flags for setups where Spotify's GPU process crashes. | Optional |
 
-| Repo | Installed at (fedora) |
-|---|---|
-| `service/canvas_server.py` | `~/.local/share/spotify-canvas/canvas_server.py` |
-| `service/view.html` | `~/.local/share/spotify-canvas/view.html` |
-| `service/spotify-canvas.service` | `~/.config/systemd/user/spotify-canvas.service` |
-| `extension/spotify-canvas.js` | `~/.config/spicetify/Extensions/spotify-canvas.js`, copied by Spicetify into `/usr/lib64/spotify-client/Apps/xpui/extensions/` |
-| `kiosk/spotify-canvas-kiosk` | `~/.local/bin/spotify-canvas-kiosk` |
-| `kiosk/spotify-canvas-kiosk.service` | `~/.config/systemd/user/spotify-canvas-kiosk.service` |
-| `launcher/spotify` | `~/.local/bin/spotify` (Spotify wrapper with the GPU flags, see below) |
+## Requirements
 
-The kiosk uses its own browser profile in `~/.local/share/spotify-canvas/kiosk-profile`. Your normal Brave profiles are never touched.
+- Linux with systemd user services (the service itself is plain Python and runs anywhere)
+- [Spicetify](https://spicetify.app)
+- `python3` 3.8+, `ffmpeg` and `ffprobe` built with libvpx-vp9
+- A Chromium-based browser (Brave by default) for the kiosk, or any browser to open `/view` yourself
+
+No sudo, and no pip packages.
 
 ## Install
 
-Needs `python3`, `ffmpeg`/`ffprobe` with libvpx-vp9, Spicetify and Brave (or another Chromium browser). No sudo.
+### 1. Service and display page
 
 ```bash
-# service + display page
 mkdir -p ~/.local/share/spotify-canvas ~/.config/systemd/user
 cp service/canvas_server.py service/view.html ~/.local/share/spotify-canvas/
-cp service/spotify-canvas.service kiosk/spotify-canvas-kiosk.service ~/.config/systemd/user/
+cp service/spotify-canvas.service ~/.config/systemd/user/
 systemctl --user daemon-reload && systemctl --user enable --now spotify-canvas
 curl -s 127.0.0.1:47800/health          # {"ok": true}
-
-# extension (reports now-playing state only)
-cp extension/spotify-canvas.js ~/.config/spicetify/Extensions/
-spicetify config extensions spotify-canvas.js
-spicetify apply                         # then restart Spotify via ~/.local/bin/spotify
-
-# kiosk on DP-1, started with the graphical session
-install -m755 kiosk/spotify-canvas-kiosk ~/.local/bin/
-systemctl --user enable --now spotify-canvas-kiosk
 ```
 
-`spicetify apply` relaunches Spotify without the wrapper flags. Quit Spotify and start it again from the desktop launcher afterwards.
+### 2. Extension
+
+From the **Spicetify Marketplace**: search for `spotify-canvas` in the Extensions tab and install it.
+
+Or by hand:
+
+```bash
+cp extension/spotify-canvas.js ~/.config/spicetify/Extensions/
+spicetify config extensions spotify-canvas.js
+spicetify apply
+```
+
+Restart Spotify afterwards.
+
+### 3. Show it
+
+**Any monitor, any desktop:** open `http://127.0.0.1:47800/view` in a browser window and make it full screen (F11). An app window keeps the browser chrome out of the way:
+
+```bash
+brave-browser --app=http://127.0.0.1:47800/view --autoplay-policy=no-user-gesture-required
+```
+
+**GNOME on Wayland, pinned to one monitor:** install the kiosk, which starts with your session and keeps the window on that monitor.
+
+```bash
+install -m755 kiosk/spotify-canvas-kiosk ~/.local/bin/
+cp kiosk/spotify-canvas-kiosk.service ~/.config/systemd/user/
+mkdir -p ~/.config/spotify-canvas
+echo CANVAS_MONITOR=DP-1 > ~/.config/spotify-canvas/kiosk.env   # your monitor's connector name
+systemctl --user daemon-reload && systemctl --user enable --now spotify-canvas-kiosk
+```
 
 ## Turning it off
 
@@ -59,29 +83,30 @@ systemctl --user enable --now spotify-canvas-kiosk
 - **Close the kiosk window**: `systemctl --user stop spotify-canvas-kiosk`. It comes back at the next login.
 - **For good**: `systemctl --user disable --now spotify-canvas-kiosk`.
 
-## Moving it to another monitor
+## Kiosk
 
-The kiosk targets a monitor by connector name (default `DP-1`):
+### Choosing the monitor
+
+The kiosk targets a monitor by connector name (default `DP-1`), set in `~/.config/spotify-canvas/kiosk.env`:
 
 ```bash
-mkdir -p ~/.config/spotify-canvas
 echo CANVAS_MONITOR=HDMI-2 > ~/.config/spotify-canvas/kiosk.env
 spotify-canvas-kiosk geometry            # prints x y w h of the target monitor, e.g. "0 0 1080 1920"
 systemctl --user restart spotify-canvas-kiosk
 ```
 
-To find connector names, run `CANVAS_MONITOR=<name> spotify-canvas-kiosk geometry` for each name in `ls /sys/class/drm` (e.g. `card1-DP-1` → `DP-1`). The page fills any size or orientation.
+To find connector names, run `CANVAS_MONITOR=<name> spotify-canvas-kiosk geometry` for each name in `ls /sys/class/drm` (e.g. `card1-DP-1` → `DP-1`). The page fills any size or orientation; a monitor rotated to portrait looks most like Canvas on a phone.
 
-`kiosk.env` also takes `CANVAS_BROWSER=google-chrome` and `CANVAS_KIOSK_FLAGS="..."` for extra browser flags.
+`kiosk.env` also takes `CANVAS_BROWSER=google-chrome` and `CANVAS_KIOSK_FLAGS="..."` for extra browser flags. The kiosk uses its own browser profile in `~/.local/share/spotify-canvas/kiosk-profile`, so your normal browser profiles are never touched.
 
-## How the kiosk stays on DP-1
+### How it stays on the monitor
 
-Wayland clients can't choose where their windows go, so the kiosk runs Brave under Xwayland (`--ozone-platform=x11`). It reads DP-1's logical geometry from Mutter (`org.gnome.Mutter.DisplayConfig.GetCurrentState`, which accounts for rotation and scale) and opens Brave with `--window-position`, `--window-size` and `--kiosk`, which fullscreens the window on that monitor.
+Wayland clients can't choose where their windows go, so the kiosk runs the browser under Xwayland (`--ozone-platform=x11`). It reads the monitor's logical geometry from Mutter (`org.gnome.Mutter.DisplayConfig.GetCurrentState`, which accounts for rotation and scale) and opens the browser with `--window-position`, `--window-size` and `--kiosk`, which fullscreens the window on that monitor.
 
-`spotify-canvas-kiosk` then runs as a supervisor. Every 5 s it reads the window's absolute X geometry (libX11 through ctypes) and relaunches Brave if:
-- the window was moved off DP-1 (GNOME or a keyboard shortcut can move fullscreen windows),
+`spotify-canvas-kiosk` then runs as a supervisor. Every 5 s it reads the window's absolute X geometry (libX11 through ctypes) and relaunches the browser if:
+- the window was moved off the monitor (GNOME or a keyboard shortcut can move fullscreen windows),
 - it was closed or crashed,
-- DP-1's mode changed, or the monitor was unplugged and plugged back in.
+- the monitor's mode changed, or it was unplugged and plugged back in.
 
 Logs: `journalctl --user -u spotify-canvas-kiosk`.
 
@@ -96,7 +121,7 @@ Logs: `journalctl --user -u spotify-canvas-kiosk`.
 
 ## Service
 
-`127.0.0.1:47800` only (override with `CANVAS_PORT`). Cache dir `~/.cache/spotify-canvas` (`CANVAS_CACHE`).
+Listens on `127.0.0.1:47800` only (override with `CANVAS_PORT`). Cache dir `~/.cache/spotify-canvas` (`CANVAS_CACHE`).
 
 | Endpoint | Result |
 |---|---|
@@ -117,43 +142,52 @@ Rate limiting:
 
 Logs: `journalctl --user -u spotify-canvas`.
 
-## GPU launcher flags (required on fedora)
+## Spotify GPU crash on Wayland
 
-On fedora's Wayland session, the Spotify GPU process segfaults in Mesa `eglInitialize → dri2_initialize_wayland` when it sets up hardware video decode. The wrapper `~/.local/bin/spotify` (copy in `launcher/spotify`), which the desktop entry runs, therefore adds:
+On some Mesa/Wayland setups, Spotify's GPU process segfaults in `eglInitialize → dri2_initialize_wayland` when it sets up hardware video decode. If Spotify crashes on start or shows a blank window, launch it through `launcher/spotify`, which adds:
 
 ```
 --disable-gpu-sandbox --disable-accelerated-video-decode
 ```
 
-These flags are mirrored in `spotify_launch_flags` in `config-xpui.ini`. Spotify no longer plays video, but keep the wrapper because the GPU sandbox fix still applies. The kiosk Brave also runs with `--disable-accelerated-video-decode`. Software VP9 decode of a 720x1280 clip is cheap.
+```bash
+install -m755 launcher/spotify ~/.local/bin/spotify   # make sure ~/.local/bin comes first in PATH
+```
+
+It finds Spotify in `/usr/lib64/spotify-client`, `/usr/share/spotify` or `/opt/spotify`; set `SPOTIFY_DIR` otherwise. You can also put the same flags in `spotify_launch_flags` in Spicetify's `config-xpui.ini`. `spicetify apply` relaunches Spotify without the wrapper, so restart it from your launcher afterwards.
+
+## Surviving Spotify updates
+
+A Spotify update removes Spicetify's patches. Run `spicetify backup apply` after each update; `extensions = spotify-canvas.js` stays in `config-xpui.ini`, so the extension comes back with it. The service and kiosk live in `$HOME`, so updates never touch them.
+
+```bash
+spicetify path                                   # where Spotify is installed
+systemctl --user is-active spotify-canvas spotify-canvas-kiosk
+```
 
 ## Uninstall
 
 ```bash
 systemctl --user disable --now spotify-canvas-kiosk spotify-canvas
-rm ~/.config/systemd/user/spotify-canvas{,-kiosk}.service ~/.local/bin/spotify-canvas-kiosk
+rm -f ~/.config/systemd/user/spotify-canvas{,-kiosk}.service ~/.local/bin/spotify-canvas-kiosk
 spicetify config extensions spotify-canvas.js-
-spicetify apply                          # then restart Spotify via ~/.local/bin/spotify
+spicetify apply
 rm ~/.config/spicetify/Extensions/spotify-canvas.js
 rm -rf ~/.local/share/spotify-canvas ~/.cache/spotify-canvas ~/.config/spotify-canvas
 systemctl --user daemon-reload
 ```
 
-Pre-install copies of `index.html`, `config-xpui.ini` and the launcher wrapper are in `~/.local/state/spotify-canvas-backup/`. The previous in-Spotify version of the extension and service is in `pre-kiosk/` there.
-
-## Surviving Spotify updates
-
-`spotify-update` (`/usr/local/bin`, from `~/spotify-update-install/`) runs `spicetify backup apply` against the real `config-xpui.ini`. `extensions = spotify-canvas.js` is set there, so the extension is re-injected after every update. The service, kiosk and wrapper live in `$HOME`, so updates never touch them.
-
-```bash
-grep -n spotify-canvas /usr/lib64/spotify-client/Apps/xpui/index.html
-systemctl --user is-active spotify-canvas spotify-canvas-kiosk
-```
-
-## Risks
+## Known limits
 
 - **Upstream site**: canvasdownloader.com can change its HTML, rate-limit, or disappear. Then tracks show the cover fallback. Cached clips keep working.
-- **Xwayland placement**: the kiosk depends on Mutter honouring an X11 window's requested position. A GNOME change could break this. The supervisor would then relaunch in a loop, about every 25 s, which shows up in its journal. With fractional scaling, the X11 geometry may not match the logical geometry exactly, so the check could misfire.
-- **Monitor names**: connector names can change, e.g. after a GPU or driver change (`DP-1` → `DP-2`). Then the kiosk waits with "DP-1 not active" in its log. Set `CANVAS_MONITOR`.
 - **Spotify API**: the extension reads `Spicetify.Player.data.item`, `getProgress`, `getDuration` and `isPlaying`. A client update that renames these fields leaves the overlay blank or the progress bar at 0.
-- **Launcher flags**: launching `/usr/lib64/spotify-client/spotify` directly, without the wrapper flags, brings back the GPU-process crash.
+- **Kiosk placement**: the kiosk depends on Mutter honouring an X11 window's requested position. A GNOME change could break this; the supervisor would then relaunch in a loop, about every 25 s, which shows up in its journal. With fractional scaling, the X11 geometry may not match the logical geometry exactly, so the check could misfire.
+- **Monitor names**: connector names can change, e.g. after a GPU or driver change (`DP-1` → `DP-2`). Then the kiosk waits with "not active" in its log. Set `CANVAS_MONITOR`.
+
+## Disclaimer
+
+Not affiliated with or endorsed by Spotify. Canvas clips, cover art and the track shown in the demo belong to their respective artists and labels; this project only displays them locally for the person playing the track. Uses an unofficial third-party source, which may stop working at any time.
+
+## License
+
+[MIT](LICENSE)
