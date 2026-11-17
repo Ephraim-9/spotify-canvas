@@ -28,7 +28,7 @@
     };
   };
   // text/plain keeps this a "simple" request (no CORS preflight). Service down -> drop silently.
-  const send = () => { try { fetch(ENDPOINT, { method: "POST", body: JSON.stringify(state()), keepalive: true }).catch(() => {}); } catch {} };
+  const send = () => { try { fetch(ENDPOINT, { method: "POST", body: JSON.stringify(state()) }).catch(() => {}); } catch {} };
 
   // Seek detection: progress that jumps away from where it should be.
   let last = { pos: 0, at: 0 };
