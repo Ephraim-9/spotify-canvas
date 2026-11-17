@@ -105,7 +105,7 @@ async function serveObject(c: Context<AppEnv>, clip: Clip, cacheControl: string)
 }
 
 app.on(["GET", "HEAD"], "/clips/:track/:file", async (c) => {
-  const track = c.req.param("track");
+  const track = c.req.param("track") ?? "";
   const m = /^(\d+)\.(mp4|webm)$/.exec(c.req.param("file"));
   if (!TRACK_RE.test(track) || !m) return c.text("Not found", 404, CORS);
   // Superseded versions stay reachable so clients holding a slightly stale index don't break.
@@ -190,7 +190,7 @@ const requireAdmin = async (c: Context<AppEnv>, next: () => Promise<void>) => {
 };
 
 app.put("/api/clips/:track", requireAdmin, async (c) => {
-  const track = c.req.param("track");
+  const track = c.req.param("track") ?? "";
   if (!TRACK_RE.test(track)) return fail(c, 400, "Invalid track ID.");
   const v = await readVideo(c, { checkDuration: false });
   if (v instanceof Response) return v;
@@ -208,7 +208,7 @@ app.put("/api/clips/:track", requireAdmin, async (c) => {
 });
 
 app.delete("/api/clips/:track", requireAdmin, async (c) => {
-  const track = c.req.param("track");
+  const track = c.req.param("track") ?? "";
   if (!TRACK_RE.test(track)) return fail(c, 400, "Invalid track ID.");
   const clip = await currentClip(c.env, track);
   if (clip) {
@@ -376,7 +376,7 @@ app.get("/", async (c) => {
 });
 
 app.get("/t/:track", async (c) => {
-  const track = c.req.param("track");
+  const track = c.req.param("track") ?? "";
   if (!TRACK_RE.test(track)) return c.html(messagePage(pctx(c), "Not found", "That isn't a track ID."), 404);
   return c.html(trackPage(pctx(c), track, await currentClip(c.env, track)));
 });
