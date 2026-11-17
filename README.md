@@ -3,7 +3,7 @@
 **Spotify Canvas on a spare monitor**, like Canvas on a phone. The looping clip of whatever you're playing fills the screen. The only overlay is the title, artist and a thin progress bar, and controls appear when you move the mouse. Nothing is drawn inside Spotify.
 
 <p align="center">
-  <img src="docs/hero.webp" width="360" alt="Canvas display looping a clip for Mr. Brightside, then crossfading to the next track's clip when the song changes">
+  <img src="docs/hero.webp" width="760" alt="A portrait display loops a track's Canvas, then crossfades to the next track's clip each time the song changes">
 </p>
 
 <p align="center">
@@ -35,18 +35,12 @@ It works in regions where Spotify doesn't serve Canvas. The clips come from [can
 
 <table>
   <tr>
-    <td align="center" width="33%"><img src="docs/cover.webp" alt="Cover art filling the screen for a track without a Canvas"><br><sub><b>No Canvas:</b> cover art</sub></td>
-    <td align="center" width="33%"><img src="docs/minimal.webp" alt="Canvas clip with the title and progress bar hidden"><br><sub><b>Clip only:</b> title hidden with <kbd>I</kbd></sub></td>
-    <td align="center" width="33%"><img src="docs/help.webp" alt="Keyboard shortcut overlay"><br><sub><b>Shortcuts:</b> press <kbd>?</kbd></sub></td>
+    <td align="center" width="50%"><img src="docs/fill.webp" alt="Portrait Canvas cropped to fill a landscape window"><br><sub><b>Fill:</b> cropped edge to edge</sub></td>
+    <td align="center" width="50%"><img src="docs/fit.webp" alt="Portrait Canvas shown whole in a landscape window, over a blurred cover"><br><sub><b>Fit:</b> whole clip over a blurred cover (<kbd>C</kbd>)</sub></td>
   </tr>
-</table>
-
-**Fill vs. fit** on a landscape window (<kbd>C</kbd> switches):
-
-<table>
   <tr>
-    <td align="center"><img src="docs/fill.webp" alt="Portrait Canvas cropped to fill a landscape window"><br><sub>Fill: cropped edge to edge</sub></td>
-    <td align="center"><img src="docs/fit.webp" alt="Portrait Canvas shown whole in a landscape window, over a blurred cover"><br><sub>Fit: whole clip, blurred cover behind</sub></td>
+    <td align="center" width="50%"><img src="docs/ambient.webp" alt="A track with no Canvas: the cover floats over a slow blur of its own colours"><br><sub><b>No clip:</b> ambient cover</sub></td>
+    <td align="center" width="50%"><img src="docs/sources.webp" alt="Clip sources panel with presets, on/off switches and ordering"><br><sub><b>Clip sources:</b> order, switch, preset (<kbd>S</kbd>)</sub></td>
   </tr>
 </table>
 
@@ -138,7 +132,7 @@ The first launch opens the window full size on `CANVAS_MONITOR`. Move or resize 
 Move the mouse over the display and the controls fade in. They fade out again, cursor included, after about 3 seconds without activity.
 
 <p align="center">
-  <img src="docs/controls.webp" width="360" alt="Mouse moves over the display, controls fade in, the seek bar is dragged forward, playback is paused and resumed, then the controls fade out">
+  <img src="docs/controls.webp" width="640" alt="Mouse moves over the display, controls fade in, the seek bar is dragged forward, playback is paused and resumed, then the controls fade out">
 </p>
 
 | Key | Action |
