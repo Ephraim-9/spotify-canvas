@@ -9,19 +9,37 @@
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; background: #000; overflow: hidden; color: #fff;
     font-family: "Inter", "Cantarell", system-ui, sans-serif; -webkit-font-smoothing: antialiased; user-select: none; }
-  body:not(.awake) { cursor: none; }
+  body:not(.awake):not(.modal) { cursor: none; }
   #stage, #backdrop { position: fixed; inset: 0; }
   .layer { position: absolute; inset: 0; opacity: 0; transition: opacity var(--fade) ease; overflow: hidden; }
   .layer.on { opacity: 1; }
-  .layer video, .layer img { width: 100%; height: 100%; object-fit: cover; display: block; }
-  /* No Canvas: the square cover fills the screen and pans slowly across the cropped art */
-  .layer.cover img { animation: drift 48s ease-in-out infinite alternate; transform: scale(1.04); filter: saturate(1.05); }
-  @keyframes drift { from { object-position: 0% 50%; } to { object-position: 100% 50%; } }
+  .layer video { width: 100%; height: 100%; object-fit: cover; display: block; }
+  /* No Canvas: the sharp cover floats over a slowly churning field of its own colours. The field is the cover
+     redrawn at 48x48 every frame (cheap), then stretched and blurred by the GPU. */
+  .layer.art canvas { position: absolute; inset: -10%; width: 120%; height: 120%;
+    filter: blur(28px) saturate(1.6) brightness(.72); }
+  .layer.art::after { content: ""; position: absolute; inset: 0;
+    background: radial-gradient(ellipse at 50% 42%, rgba(0,0,0,0) 30%, rgba(0,0,0,.45) 100%); }
+  .layer.art img { position: absolute; z-index: 1; left: 50%; top: 42%; width: min(56vmin, 78vw); aspect-ratio: 1;
+    object-fit: cover; border-radius: 1.2vmin; transform: translate(-50%, -50%) scale(1);
+    box-shadow: 0 2vmin 7vmin rgba(0,0,0,.55), 0 .4vmin 1.4vmin rgba(0,0,0,.35);
+    transition: transform 700ms cubic-bezier(.2,.8,.2,1), box-shadow 700ms ease; }
+  @media (orientation: portrait) { .layer.art img { width: 78vw; top: 40%; } }
+  body.paused .layer.art img { transform: translate(-50%, -50%) scale(.86); box-shadow: 0 1vmin 3vmin rgba(0,0,0,.4); }
+  /* Where the clip came from, when it isn't the track's own Canvas */
+  #source { position: fixed; top: 20px; right: 24px; font-size: 13px; padding: 5px 10px; border-radius: 6px;
+    background: rgba(0,0,0,.45); color: rgba(255,255,255,.8); opacity: 0; transition: opacity 300ms ease; pointer-events: none; }
+  body.awake #source:not(:empty) { opacity: 1; }
+  /* Drop a video or GIF to make it this track's clip */
+  #drop { position: fixed; inset: 16px; display: grid; place-items: center; border: 2px dashed rgba(255,255,255,.6);
+    border-radius: 18px; background: rgba(0,0,0,.6); font-size: clamp(16px, 2.2vw, 26px); opacity: 0;
+    transition: opacity 150ms ease; pointer-events: none; text-align: center; padding: 24px; }
+  body.dragging #drop { opacity: 1; }
   /* Fit mode: whole clip visible, blurred cover behind it */
   #backdrop { opacity: 0; transition: opacity var(--fade) ease; background: center / cover no-repeat;
     filter: blur(48px) brightness(.45) saturate(1.2); transform: scale(1.2); }
   body.fit #backdrop { opacity: 1; }
-  body.fit .layer video, body.fit .layer.cover img { object-fit: contain; animation: none; transform: none; }
+  body.fit .layer video { object-fit: contain; }
 
   #shade { position: fixed; left: 0; right: 0; bottom: 0; height: 42vh; pointer-events: none; transition: opacity 400ms ease;
     background: linear-gradient(to bottom, rgba(0,0,0,0) 0%, rgba(0,0,0,.35) 45%, rgba(0,0,0,.78) 100%); }
@@ -69,7 +87,57 @@
   #help { position: fixed; inset: 0; display: none; place-items: center; background: rgba(0,0,0,.72); }
   #help.show { display: grid; }
   #help table { font-size: 15px; border-spacing: 18px 8px; }
-  #help kbd { font: inherit; padding: 2px 8px; border-radius: 5px; background: rgba(255,255,255,.14); }
+  #help kbd, #settings kbd { font: inherit; padding: 2px 8px; border-radius: 5px; background: rgba(255,255,255,.14); }
+  body.modal, body.modal * { cursor: default; }
+  body.modal button, body.modal label { cursor: pointer; }
+
+  /* Settings: which clip sources to use, and in what order */
+  #settings { position: fixed; inset: 0; display: none; place-items: center; background: rgba(0,0,0,.72); }
+  #settings.show { display: grid; }
+  #panel { width: min(640px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow: auto; padding: 22px 24px 18px;
+    border-radius: 16px; background: rgba(24,24,24,.9); border: 1px solid rgba(255,255,255,.1);
+    box-shadow: 0 24px 80px rgba(0,0,0,.6); }
+  #panel header { display: flex; align-items: flex-start; gap: 12px; }
+  #panel h2 { margin: 0; font-size: 20px; font-weight: 700; letter-spacing: -.01em; }
+  #panel p { margin: 4px 0 0; font-size: 13px; line-height: 1.4; color: rgba(255,255,255,.62); }
+  #panel header div { flex: 1; }
+  #panel button.close { width: 36px; height: 36px; margin: -6px -8px 0 0; flex: none; }
+  #panel button.close svg { width: 20px; height: 20px; }
+  #panel h3 { margin: 20px 0 8px; font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
+    color: rgba(255,255,255,.5); }
+  #presets { display: flex; flex-wrap: wrap; gap: 8px; }
+  #panel button.pill { width: auto; height: auto; padding: 7px 13px; border-radius: 999px; font-size: 13px; font-weight: 500;
+    border: 1px solid rgba(255,255,255,.2); display: block; }
+  #panel button.pill:hover { background: rgba(255,255,255,.12); }
+  #panel button.pill.on { color: #1ed760; border-color: rgba(30,215,96,.65); }
+  #src-list { list-style: none; margin: 0; padding: 0; }
+  .row { display: grid; grid-template-columns: 24px 1fr auto auto; align-items: center; gap: 12px; padding: 9px 0;
+    border-top: 1px solid rgba(255,255,255,.08); }
+  .row:first-child { border-top: 0; }
+  .row input { width: 20px; height: 20px; margin: 0; accent-color: #1ed760; cursor: pointer; }
+  .row input:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+  .row label { display: block; min-width: 0; cursor: pointer; }
+  .row .nm { display: block; font-size: 15px; font-weight: 600; }
+  .row .ds { display: block; margin-top: 2px; font-size: 12.5px; color: rgba(255,255,255,.6); white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; }
+  .row.off .nm, .row.off .ds { opacity: .5; }
+  .row .dot { width: 8px; height: 8px; border-radius: 50%; background: #1ed760; }
+  .row .tag { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: rgba(255,255,255,.16);
+    color: #fff; white-space: nowrap; }
+  .row .tags { display: flex; align-items: center; gap: 8px; justify-content: flex-end; min-width: 8px; }
+  .row .mv { display: flex; gap: 2px; }
+  #panel .mv button { width: 32px; height: 32px; }
+  #panel .mv button svg { width: 20px; height: 20px; }
+  #panel .mv button:disabled { opacity: .25; cursor: default; background: none; }
+  #pin-line { display: flex; align-items: center; gap: 10px; min-height: 28px; margin-top: 12px; font-size: 13px;
+    color: rgba(255,255,255,.75); }
+  #panel button.link { width: auto; height: auto; display: inline; padding: 2px 4px; border-radius: 4px; text-decoration: underline; }
+  #panel button.link:hover { background: none; color: #fff; }
+  #panel #legend { margin-top: 6px; font-size: 12px; color: rgba(255,255,255,.5); }
+  #legend .dot { display: inline-block; width: 8px; height: 8px; margin-right: 2px; border-radius: 50%; background: #1ed760; }
+  #legend kbd { font-size: 11px; padding: 1px 6px; }
+  .vh { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  @media (max-width: 520px) { .row { grid-template-columns: 24px 1fr auto auto; } .row .tags { display: none; } }
 </style>
 </head>
 <body class="idle">
@@ -82,17 +150,21 @@
   <div id="times"><span id="cur">0:00</span><span id="dur">0:00</span></div>
   <div id="ctl">
     <button id="info-btn" title="Show title and artist (I)"><svg viewBox="0 0 24 24"><path d="M11 7h2v2h-2zm0 4h2v6h-2zm1-9a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16z"/></svg></button>
+    <button id="artist-btn" title="Use another track's clip by the same artist when a track has none (A)" aria-label="Artist's other clips"><svg viewBox="0 0 24 24"><path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm0 2c-2.7 0-8 1.3-8 4v2h16v-2c0-2.7-5.3-4-8-4z"/></svg></button>
     <button id="fit" title="Fit whole clip / fill screen (C)"><svg viewBox="0 0 24 24"><path d="M19 12h-2v3h-3v2h5v-5zM7 9h3V7H5v5h2V9zm14-6H3a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h18a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zm0 16H3V5h18v14z"/></svg></button>
     <span class="spacer"></span>
     <button id="prev" class="mpris" title="Previous (P)"><svg viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6 8.5 6V6z"/></svg></button>
     <button id="play" class="mpris" title="Play/pause (Space)"><svg viewBox="0 0 24 24"><path id="play-path" d="M8 5v14l11-7z"/></svg></button>
     <button id="next" class="mpris" title="Next (N)"><svg viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg></button>
     <span class="spacer"></span>
+    <button id="settings-btn" title="Clip sources (S)" aria-label="Clip sources"><svg viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.488.488 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6A3.6 3.6 0 1 1 12 8.4a3.6 3.6 0 0 1 0 7.2z"/></svg></button>
     <button id="help-btn" title="Shortcuts (?)"><svg viewBox="0 0 24 24"><path d="M11 18h2v-2h-2v2zm1-16a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16zm0-14a4 4 0 0 0-4 4h2a2 2 0 1 1 4 0c0 2-3 1.75-3 5h2c0-2.25 3-2.5 3-5a4 4 0 0 0-4-4z"/></svg></button>
     <button id="fs" title="Full screen (F, double-click)"><svg viewBox="0 0 24 24"><path id="fs-path" d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg></button>
   </div>
 </div>
 <div id="toast"></div>
+<div id="source"></div>
+<div id="drop">Drop a video or GIF to make it this track's clip</div>
 <div id="help"><table>
   <tr><td><kbd>Space</kbd> <kbd>K</kbd></td><td>Play / pause</td></tr>
   <tr><td><kbd>N</kbd> <kbd>P</kbd></td><td>Next / previous track</td></tr>
@@ -100,8 +172,30 @@
   <tr><td><kbd>F</kbd> or double-click</td><td>Full screen</td></tr>
   <tr><td><kbd>C</kbd></td><td>Fit whole clip / fill screen</td></tr>
   <tr><td><kbd>I</kbd></td><td>Show / hide title and artist</td></tr>
+  <tr><td><kbd>S</kbd></td><td>Clip sources: order, on/off, presets</td></tr>
+  <tr><td><kbd>V</kbd> <kbd>Shift</kbd>+<kbd>V</kbd></td><td>Pin this track to its next ready source / unpin</td></tr>
+  <tr><td><kbd>A</kbd></td><td>Other clips by the artist on / off</td></tr>
+  <tr><td>Drop a file</td><td>Use a video or GIF as this track's clip</td></tr>
+  <tr><td><kbd>Del</kbd> twice</td><td>Remove your clip for this track</td></tr>
   <tr><td><kbd>?</kbd> <kbd>Esc</kbd></td><td>This help</td></tr>
 </table></div>
+<div id="settings" role="dialog" aria-modal="true" aria-labelledby="panel-title">
+  <div id="panel">
+    <header>
+      <div>
+        <h2 id="panel-title">Clip sources</h2>
+        <p>Tried from the top. The first one that has a clip for the track plays; generated ones show up when ready.</p>
+      </div>
+      <button class="close" id="settings-close" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg></button>
+    </header>
+    <h3>Presets</h3>
+    <div id="presets"></div>
+    <h3>Sources</h3>
+    <ol id="src-list"></ol>
+    <div id="pin-line"></div>
+    <p id="legend"><span class="dot"></span> ready for this track now. <kbd>V</kbd> pins the track to a source, <kbd>Esc</kbd> closes.</p>
+  </div>
+</div>
 <script>
 "use strict";
 const $ = id => document.getElementById(id);
@@ -116,6 +210,7 @@ function applyPrefs() {
   body.classList.toggle("noinfo", !!prefs.noinfo);
   $("fit").classList.toggle("on", !!prefs.fit);
   $("info-btn").classList.toggle("on", !prefs.noinfo);
+  if (st.id) render();
 }
 applyPrefs();
 
@@ -128,7 +223,7 @@ function show(key, make) {
   if (layer) {
     stage.appendChild(layer);
     const reveal = () => requestAnimationFrame(() => layer && layer.classList.add("on"));
-    const media = layer.firstChild;
+    const media = layer.querySelector("video, img");
     if (media.tagName === "VIDEO") media.addEventListener("loadeddata", reveal, { once: true });
     else if (media.complete) reveal(); else media.addEventListener("load", reveal, { once: true });
     media.addEventListener("error", () => onMediaError(media, key), { once: true });
@@ -139,20 +234,64 @@ function show(key, make) {
     else { old.classList.remove("on"); setTimeout(drop, 1000); }
   }
 }
-function videoLayer(src) {
+// A loop plays by itself. A synced video (the full music video) is driven by syncVideo(): it follows the song position.
+function videoLayer(src, sync) {
   const d = document.createElement("div"); d.className = "layer canvas";
   const v = document.createElement("video");
-  Object.assign(v, { muted: true, loop: true, playsInline: true, autoplay: st.playing, preload: "auto", src });
+  Object.assign(v, { muted: true, loop: !sync, playsInline: true, autoplay: !sync && st.playing, preload: "auto", src });
   v.disablePictureInPicture = true;
+  if (sync) {
+    d.dataset.sync = "1";
+    v.addEventListener("loadedmetadata", () => { v.currentTime = Math.min(position() / 1000, Math.max(0, v.duration - .1)); }, { once: true });
+  }
   d.appendChild(v);
   return d;
 }
-function coverLayer(src) {
-  const d = document.createElement("div"); d.className = "layer cover";
+function artLayer(src) {
+  const d = document.createElement("div"); d.className = "layer art";
+  const c = document.createElement("canvas"); c.width = c.height = 48;
   const i = new Image(); i.decoding = "async"; i.src = src;
-  d.appendChild(i);
+  d.append(c, i);
   return d;
 }
+// Ambient field: three copies of the cover, each turning around its own off-centre point at its own speed.
+// Motion slows to a crawl while paused. Only the visible art layer is drawn.
+let ambT = 0, ambLast = performance.now();
+(function ambient(now) {
+  ambT += (now - ambLast) / 1000 * (st.playing ? 1 : .25); ambLast = now;
+  for (const d of stage.querySelectorAll(".layer.art")) {
+    const c = d.firstChild, img = d.lastChild, g = c.getContext("2d");
+    if (!img.complete || !img.naturalWidth) continue;
+    const N = c.width, t = ambT;
+    g.globalAlpha = 1; g.drawImage(img, 0, 0, N, N);
+    for (const [sp, r, k, a] of [[.05, .22, 1.7, .75], [-.037, .3, 2.1, .6], [.023, .18, 2.6, .5]]) {
+      g.save();
+      g.globalAlpha = a;
+      g.translate(N / 2 + Math.cos(t * sp * 3) * N * r, N / 2 + Math.sin(t * sp * 2) * N * r);
+      g.rotate(t * sp * 2 * Math.PI);
+      const s = N * (k + .25 * Math.sin(t * sp * 5));
+      g.drawImage(img, -s / 2, -s / 2, s, s);
+      g.restore();
+    }
+  }
+  requestAnimationFrame(ambient);
+})(performance.now());
+// Spotify serves H.264 MP4s; a browser without H.264 gets a VP9 copy the service makes on demand.
+const H264 = document.createElement("video").canPlayType('video/mp4; codecs="avc1.640028"') !== "";
+const clip = url => url && (H264 || !url.startsWith("/canvas/") ? url : url.replace(/\.mp4$/, ".webm"));
+// On-screen label for the clip's source (the track's own Spotify Canvas needs none), and names for toasts and settings
+const LABELS = { custom: "Your clip", community: "Community clip", mv: "From the music video", video: "Music video",
+  artist: "Clip from another track by this artist" };
+const NAMES = { custom: "Your clip", spotify: "Spotify Canvas", community: "Community clip", mv: "Music-video loop",
+  artist: "Artist's other clip", video: "Music video", cover: "Cover art" };
+const DESCS = { custom: "Your own clip, dropped on the display for this track",
+  spotify: "The track's own Spotify Canvas",
+  community: "A clip from the community site",
+  mv: "8 s loop cut from the music video, made in the background",
+  artist: "A cached clip from another track by the same artist",
+  video: "The full music video, muted and synced to the song",
+  cover: "Ambient cover. Last resort; moved up, it hides what's below" };
+const IDS = Object.keys(NAMES);
 const failed = new Map(); // layer key -> error count
 const ok = key => (failed.get(key) || 0) < (key.startsWith("v:") ? 4 : 1);
 function onMediaError(el, key) {
@@ -165,26 +304,48 @@ function onMediaError(el, key) {
 // ---------- render ----------
 const PLAY = "M8 5v14l11-7z", PAUSE = "M6 19h4V5H6v14zm8-14v14h4V5h-4z";
 function render() {
+  const cfg = st.settings;
+  $("artist-btn").classList.toggle("on", !!(cfg && cfg.enabled.artist));
+  $("artist-btn").setAttribute("aria-pressed", !!(cfg && cfg.enabled.artist));
+  if (settingsOpen) renderSettings();
   body.classList.toggle("idle", !st.enabled || !st.id);
   body.classList.toggle("controls", !!st.controls);
+  body.classList.toggle("paused", !st.playing);
   $("play-path").setAttribute("d", st.playing ? PAUSE : PLAY);
   $("backdrop").style.backgroundImage = st.cover ? `url("${st.cover}")` : "none";
   if (!st.enabled || !st.id) return show(null);
   $("title").textContent = st.title || "";
   $("artist").textContent = st.artist || "";
   document.title = st.title ? `${st.title} · ${st.artist}` : "Canvas";
-  const vk = "v:" + st.canvas, ck = "c:" + st.cover;
-  if (st.canvas && st.canvas !== "pending" && ok(vk)) show(vk, () => videoLayer(st.canvas));
-  else if (st.canvas === "pending" && layerKey === "v:/canvas/" + st.id + ".webm") {}  // same track re-enabled: keep the clip
-  else if (st.cover && ok(ck)) show(ck, () => coverLayer(st.cover));
+  const own = st.canvas && st.canvas !== "pending" ? clip(st.canvas) : null;
+  const vk = "v:" + own, ck = "c:" + st.cover;
+  let label = "";
+  if (own && ok(vk)) { show(vk, () => videoLayer(own, st.mode === "sync")); label = LABELS[st.source] || ""; }
+  else if (st.canvas === "pending" && layerKey && layerKey.startsWith("v:") && layerKey.includes(st.id)) {}  // same track re-enabled: keep the clip
+  else if (st.cover && ok(ck)) show(ck, () => artLayer(st.cover));
   else show(null);
+  $("source").textContent = label;
   syncPlay();
 }
 function syncPlay() {
   const v = layer && layer.querySelector("video");
   if (!v) return;
+  if (layer.dataset.sync) return syncVideo();
   if (st.playing) v.play().catch(() => {}); else v.pause();
 }
+// The full music video follows the song: it plays and pauses with it, seeks when it drifts more than 0.35 s (a track
+// seek shows up the same way), and holds its last frame when the song outlasts it.
+function syncVideo() {
+  const v = layer && layer.dataset.sync && layer.querySelector("video");
+  if (!v || v.readyState < 1 || v.seeking) return;
+  const end = isFinite(v.duration) ? Math.max(0, v.duration - .1) : Infinity;
+  const want = position() / 1000, t = Math.min(want, end), drift = Math.abs(v.currentTime - t);
+  if (want >= end) { if (!v.paused) v.pause(); if (drift > .2) v.currentTime = t; return; }
+  if (!st.playing) { if (!v.paused) v.pause(); if (drift > .05) v.currentTime = t; return; }
+  if (drift > .35) v.currentTime = t;
+  if (v.paused) v.play().catch(() => {});
+}
+setInterval(syncVideo, 200);
 function position() {
   if (!st.duration) return 0;
   const p = st.position + (st.playing ? (st.age || 0) + performance.now() - recvAt : 0);
@@ -230,10 +391,164 @@ $("prev").onclick = () => control("previous");
 $("fs").onclick = fullscreen;
 $("fit").onclick = () => setPref("fit", !prefs.fit);
 $("info-btn").onclick = () => setPref("noinfo", !prefs.noinfo);
+$("artist-btn").onclick = toggleArtist;
 $("help-btn").onclick = () => $("help").classList.toggle("show");
+$("settings-btn").onclick = () => openSettings(true);
 $("help").onclick = () => $("help").classList.remove("show");
 for (const b of document.querySelectorAll("button")) b.addEventListener("dblclick", e => e.stopPropagation());
-document.addEventListener("dblclick", e => { if (!e.target.closest("#info")) fullscreen(); });
+document.addEventListener("dblclick", e => { if (!e.target.closest("#info, #settings")) fullscreen(); });
+
+// ---------- clip sources: settings panel, presets, per-track pin ----------
+const ALL_ORDER = ["custom", "spotify", "community", "mv", "artist", "video", "cover"];
+const PRESETS = [
+  { name: "Canvas first", order: ALL_ORDER, on: ["custom", "spotify", "community", "mv", "artist", "cover"] },
+  { name: "Music video", order: ["custom", "video", "spotify", "mv", "community", "artist", "cover"], on: IDS },
+  { name: "Loops only", order: ALL_ORDER, on: ["custom", "spotify", "community", "mv", "cover"] },
+  { name: "Spotify only", order: ["spotify", "custom", "community", "mv", "artist", "video", "cover"], on: ["spotify", "cover"] },
+  { name: "Cover only", order: ALL_ORDER, on: ["cover"] },
+];
+const enabledMap = on => Object.fromEntries(IDS.map(id => [id, on.includes(id)]));
+// What is actually tried, in order: enabled sources up to an enabled cover (the cover is the last resort either way)
+function walkOf(cfg) {
+  const w = [];
+  for (const id of cfg.order) { if (id === "cover") { if (cfg.enabled.cover) break; } else if (cfg.enabled[id]) w.push(id); }
+  return w.join();
+}
+async function saveSettings(patch) {
+  const prev = st.settings;
+  if (prev) st = { ...st, settings: { order: patch.order || prev.order, enabled: { ...prev.enabled, ...patch.enabled } } };
+  render();
+  try {
+    const r = await fetch("/settings", { method: "POST", body: JSON.stringify(patch) });
+    if (!r.ok) throw new Error(r.status);
+    return true;
+  } catch {
+    if (prev) { st = { ...st, settings: prev }; render(); }
+    toast("Couldn't save the settings");
+    return false;
+  }
+}
+const settingsEl = $("settings"), listEl = $("src-list"), rows = {};
+let settingsOpen = false, lastFocus = null;
+const chev = d => `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${d}"/></svg>`;
+for (const id of IDS) {
+  const li = document.createElement("li"); li.className = "row"; rows[id] = li;
+  li.innerHTML = `<input type="checkbox" id="en-${id}" aria-labelledby="nm-${id}" aria-describedby="ds-${id}">
+    <label for="en-${id}"><span class="nm" id="nm-${id}"></span><span class="ds" id="ds-${id}"></span></label>
+    <span class="tags"><span class="tag" hidden>Showing</span><span class="dot" role="img" aria-label="Ready for this track" title="Ready for this track" hidden></span></span>
+    <span class="mv"><button class="up" aria-label="Move ${NAMES[id]} up" title="Move up">${chev("M7.41 15.41 12 10.83l4.59 4.58L18 14l-6-6-6 6z")}</button><button class="down" aria-label="Move ${NAMES[id]} down" title="Move down">${chev("M7.41 8.59 12 13.17l4.59-4.58L18 10l-6 6-6-6z")}</button></span>`;
+  li.querySelector(".nm").textContent = NAMES[id];
+  li.querySelector(".ds").textContent = DESCS[id];
+  li.querySelector("input").onchange = e => saveSettings({ enabled: { [id]: e.target.checked } });
+  const move = dir => {
+    const o = [...st.settings.order], i = o.indexOf(id), j = i + dir;
+    if (j < 0 || j >= o.length) return;
+    [o[i], o[j]] = [o[j], o[i]];
+    saveSettings({ order: o });
+  };
+  li.querySelector(".up").onclick = () => move(-1);
+  li.querySelector(".down").onclick = () => move(1);
+}
+for (const p of PRESETS) {
+  const b = document.createElement("button"); b.className = "pill"; b.textContent = p.name; b.dataset.walk = walkOf({ order: p.order, enabled: enabledMap(p.on) });
+  b.onclick = () => saveSettings({ order: p.order, enabled: enabledMap(p.on) }).then(ok => ok && toast("Preset: " + p.name));
+  $("presets").appendChild(b);
+}
+function renderSettings() {
+  const cfg = st.settings;
+  if (!cfg) return;
+  const active = document.activeElement, avail = st.available || [], w = walkOf(cfg);
+  cfg.order.forEach((id, i) => {
+    const li = rows[id];
+    if (listEl.children[i] !== li) listEl.insertBefore(li, listEl.children[i] || null);
+    li.classList.toggle("off", !cfg.enabled[id]);
+    li.querySelector("input").checked = !!cfg.enabled[id];
+    li.querySelector(".dot").hidden = !avail.includes(id);
+    li.querySelector(".tag").hidden = st.source !== id;
+    li.querySelector(".up").disabled = i === 0;
+    li.querySelector(".down").disabled = i === cfg.order.length - 1;
+  });
+  for (const b of $("presets").children) b.classList.toggle("on", b.dataset.walk === w);
+  const pin = $("pin-line");
+  pin.textContent = "";
+  if (st.id && st.pin) {
+    const clr = document.createElement("button"); clr.className = "link"; clr.textContent = "Clear pin";
+    clr.onclick = () => cyclePin(true);
+    pin.append(`Pinned for this track: ${NAMES[st.pin] || st.pin}.`, clr);
+  } else if (st.id) pin.textContent = "Not pinned. This track follows the order above.";
+  if (active && active.isConnected && settingsEl.contains(active)) {  // keep the focus where the user was, through reorders
+    if (active.disabled) { const alt = active.parentElement.querySelector(active.classList.contains("up") ? ".down" : ".up"); if (alt) alt.focus(); }
+    else if (document.activeElement !== active) active.focus();
+  }
+}
+function openSettings(on) {
+  if (on === settingsOpen) return;
+  settingsOpen = on;
+  settingsEl.classList.toggle("show", on); body.classList.toggle("modal", on);
+  if (on) {
+    $("help").classList.remove("show");
+    lastFocus = document.activeElement;
+    renderSettings();
+    $("presets").firstChild.focus();
+  } else if (lastFocus && lastFocus.isConnected) lastFocus.focus();
+}
+$("settings-close").onclick = () => openSettings(false);
+settingsEl.onclick = e => { if (e.target === settingsEl) openSettings(false); };
+function trapTab(e) {
+  const f = [...settingsEl.querySelectorAll("button:not(:disabled), input")], i = f.indexOf(document.activeElement);
+  if (e.shiftKey && i <= 0) { e.preventDefault(); f[f.length - 1].focus(); }
+  else if (!e.shiftKey && i === f.length - 1) { e.preventDefault(); f[0].focus(); }
+}
+function toggleArtist() {
+  if (!st.settings) return;
+  const on = !st.settings.enabled.artist;
+  saveSettings({ enabled: { artist: on } }).then(ok => ok && toast(on ? "Other clips by this artist: on" : "Other clips by this artist: off"));
+}
+// V pins the playing track to its next ready source (cover included); Shift+V unpins
+function cyclePin(clear) {
+  if (!st.id) return toast("Nothing is playing");
+  const id = st.id;
+  const send = (src, msg) => fetch("/settings", { method: "POST", body: JSON.stringify({ pins: { [id]: src } }) })
+    .then(r => { if (!r.ok) throw 0; toast(msg); }).catch(() => toast("Couldn't save the pin"));
+  if (clear) { if (!st.pin) return toast("Nothing pinned for this track"); st = { ...st, pin: null }; return send(null, "Pin cleared"); }
+  if (!st.source) return toast("Still looking for clips…");
+  const av = st.available || [];
+  if (av.length < 2) return toast("No other source is ready for this track");
+  const next = av[(av.indexOf(st.source) + 1) % av.length];
+  st = { ...st, source: next, pin: next };  // so a quick second press moves on; the next state from the service confirms
+  send(next, "Pinned: " + NAMES[next]);
+}
+
+// custom clips: drop a file on the display; Delete twice removes it
+let dragDepth = 0;
+const hasFiles = e => [...(e.dataTransfer?.types || [])].includes("Files");
+document.addEventListener("dragenter", e => { if (hasFiles(e) && st.id) { dragDepth++; body.classList.add("dragging"); } });
+document.addEventListener("dragleave", () => { if (--dragDepth <= 0) { dragDepth = 0; body.classList.remove("dragging"); } });
+document.addEventListener("dragover", e => { if (hasFiles(e)) e.preventDefault(); });
+document.addEventListener("drop", async e => {
+  e.preventDefault(); dragDepth = 0; body.classList.remove("dragging");
+  const f = e.dataTransfer.files[0], id = st.id;
+  if (!f || !id) return;
+  if (!/^(video|image\/gif)/.test(f.type)) return toast("Drop a video or a GIF");
+  if (f.size > 60 << 20) return toast("That file is over 60 MB");
+  toast(`Converting clip for ${st.title || "this track"}…`);
+  try {
+    const r = await fetch("/custom/" + id, { method: "POST", body: f });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) return toast(j.reason === "unreadable" ? "Couldn't read that file as a video" : "Couldn't save the clip");
+    toast(j.published ? "Clip saved and published" : j.error ? "Saved here, but publishing failed" : "Clip saved");
+  } catch { toast("Canvas service unreachable"); }
+});
+let delArmed = 0;
+async function removeCustom() {
+  if (st.source !== "custom") return toast("This track has no clip of yours");
+  if (Date.now() - delArmed > 3000) { delArmed = Date.now(); return toast("Press Delete again to remove your clip"); }
+  delArmed = 0;
+  try {
+    const j = await (await fetch("/custom/" + st.id, { method: "DELETE" })).json();
+    toast(j.unpublished ? "Clip removed here and from the site" : j.error ? "Removed here, but not from the site" : "Clip removed");
+  } catch { toast("Canvas service unreachable"); }
+}
 
 // seek bar: click or drag
 const seekEl = $("seek");
@@ -249,11 +564,17 @@ seekEl.addEventListener("pointercancel", () => { dragAt = null; });
 document.addEventListener("keydown", e => {
   if (e.ctrlKey || e.altKey || e.metaKey) return;
   const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  if (settingsOpen) {  // the panel keeps Space, Enter and the arrows for its own buttons and checkboxes
+    if (k === "Escape" || k === "s") { e.preventDefault(); openSettings(false); }
+    else if (k === "Tab") trapTab(e);
+    return;
+  }
   const act = {
     " ": playPause, k: playPause, n: () => control("next"), p: () => control("previous"),
     ArrowRight: () => e.shiftKey ? control("next") : seekTo(position() + 10000),
     ArrowLeft: () => e.shiftKey ? control("previous") : seekTo(position() - 10000),
     f: fullscreen, c: () => setPref("fit", !prefs.fit), i: () => setPref("noinfo", !prefs.noinfo),
+    a: toggleArtist, s: () => openSettings(true), v: () => cyclePin(e.shiftKey), Delete: removeCustom,
     "?": () => $("help").classList.toggle("show"), Escape: () => $("help").classList.remove("show"),
   }[k];
   if (!act) return;
@@ -282,7 +603,7 @@ function connect() {
   es.onerror = () => { if (es.readyState === EventSource.CLOSED) setTimeout(connect, 3000); };
 }
 connect();
-window.CanvasView = { get state() { return st; }, get layer() { return layerKey; }, position };
+window.CanvasView = { get state() { return st; }, get layer() { return layerKey; }, get video() { return layer && layer.querySelector("video"); }, position };
 </script>
 </body>
 </html>

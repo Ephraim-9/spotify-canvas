@@ -13,24 +13,29 @@
   <img alt="Spicetify Marketplace" src="https://img.shields.io/badge/spicetify-marketplace-1ed760">
 </p>
 
-It works in regions where Spotify doesn't serve Canvas. The clips come from [canvasdownloader.com](https://canvasdownloader.com), and a small local service converts them to VP9 WebM and serves the display page.
+It works in regions where Spotify doesn't serve Canvas. The clips come from [canvasdownloader.com](https://canvasdownloader.com), and a small local service caches them and serves the display page.
 
 ## Features
 
 - **Edge-to-edge Canvas.** The looping clip fills any window size or orientation; a monitor rotated to portrait looks most like a phone. It pauses when Spotify pauses and crossfades when the track changes.
 - **Playback controls.** Move the mouse to get previous, play/pause, next and a seek bar you can click or drag. Everything fades out again after a few seconds, cursor included.
 - **Fill or fit.** Crop the clip to fill the screen, or show the whole clip on a blurred copy of the cover.
-- **Cover art fallback.** Tracks with no Canvas show their cover art, panning slowly.
+- **Fast.** A new track's clip shows up about half a second after the song changes. The clip is cached as Spotify serves it, with no re-encode.
+- **Clip sources you order and switch.** Seven sources (your own clip, the track's Spotify Canvas, a community clip, a music-video loop, another clip by the same artist, the full music video, the cover) tried from the top, each with an on/off switch. Presets cover the common setups; <kbd>S</kbd> opens the panel.
+- **Music video, in sync.** The whole video of the song, muted, follows the song position: it pauses, seeks and resumes with Spotify. Made in the background with yt-dlp, only when it is reached in your order, and never published.
+- **Pin a source per track.** <kbd>V</kbd> steps the playing track through the sources that are ready for it and remembers the choice. <kbd>Shift</kbd>+<kbd>V</kbd> unpins.
+- **Artist clip fallback.** A track with no Canvas can borrow a cached clip from another track by the same artist, with a small label saying so. <kbd>A</kbd> turns this on and off.
+- **Ambient cover fallback.** With no clip at all, the sharp cover floats over a slowly moving blur of its own colours, and shrinks back while paused.
 - **Movable window that remembers its place,** or a kiosk pinned full screen to one monitor.
 - **Keyboard shortcuts** for everything.
 - **No Spicetify needed on Linux.** Now playing is read from Spotify's MPRIS interface on the session bus. The Spicetify extension is the source on macOS and Windows.
-- **Light and local.** Python standard library plus ffmpeg, listens on `127.0.0.1` only, one request per track to the clip source, results cached on disk.
+- **Light and local.** Python standard library only, listens on `127.0.0.1` only, one request per track to the clip source, results cached on disk.
 
 ## Gallery
 
 <table>
   <tr>
-    <td align="center" width="33%"><img src="docs/cover.webp" alt="Cover art filling the screen for a track without a Canvas"><br><sub><b>No Canvas:</b> cover art, slowly panning</sub></td>
+    <td align="center" width="33%"><img src="docs/cover.webp" alt="Cover art filling the screen for a track without a Canvas"><br><sub><b>No Canvas:</b> cover art</sub></td>
     <td align="center" width="33%"><img src="docs/minimal.webp" alt="Canvas clip with the title and progress bar hidden"><br><sub><b>Clip only:</b> title hidden with <kbd>I</kbd></sub></td>
     <td align="center" width="33%"><img src="docs/help.webp" alt="Keyboard shortcut overlay"><br><sub><b>Shortcuts:</b> press <kbd>?</kbd></sub></td>
   </tr>
@@ -53,10 +58,10 @@ Spotify ── MPRIS (D-Bus, Linux) ──────────────�
                                               ▼
                               canvas_server.py  127.0.0.1:47800
                                 │ track change → canvasdownloader.com (1 request per track, cached)
-                                │ canvaz.scdn.co MP4 ─ffmpeg─▶ VP9 WebM ≤720x1280, no audio
+                                │ canvaz.scdn.co MP4 cached as is (VP9 WebM made on demand only for browsers without H.264)
                                 │ POST /control ─▶ MPRIS PlayPause / Next / Previous / SetPosition
                                 ▼
-Browser window ◀── GET /view + /events (SSE) + /canvas/<id>.webm
+Browser window ◀── GET /view + /events (SSE) + /canvas/<id>.mp4
   (opened with your session by spotify-canvas-kiosk: a movable window, or pinned to one monitor)
 ```
 
@@ -69,7 +74,9 @@ Browser window ◀── GET /view + /events (SSE) + /canvas/<id>.webm
 
 ## Requirements
 
-- `python3` 3.8+, and `ffmpeg` + `ffprobe` built with libvpx-vp9
+- `python3` 3.8+
+- A browser that plays H.264 (Brave, Chrome and Edge do). Otherwise also `ffmpeg` built with libvpx-vp9, so the service can make a VP9 copy
+- Optional, for the music-video loop and the full music video: `yt-dlp` and `ffmpeg` on the `PATH`
 - Linux: systemd user services and `busctl` (part of systemd) for MPRIS. The service itself is plain Python and runs anywhere.
 - macOS / Windows: [Spicetify](https://spicetify.app) for the extension
 - A Chromium-based browser (Brave by default) for the kiosk launcher, or any browser to open `/view` yourself
@@ -142,9 +149,40 @@ Move the mouse over the display and the controls fade in. They fade out again, c
 | <kbd>F</kbd> or double-click | Full screen |
 | <kbd>C</kbd> | Fit the whole clip / fill the screen |
 | <kbd>I</kbd> | Show / hide title and artist. Hidden, the display shows only the clip until you move the mouse |
-| <kbd>?</kbd> / <kbd>Esc</kbd> | Shortcut help |
+| <kbd>S</kbd> | Clip sources panel: presets, order, on/off |
+| <kbd>V</kbd> / <kbd>Shift</kbd>+<kbd>V</kbd> | Pin this track to its next ready source (cover included) / unpin |
+| <kbd>A</kbd> | Other clips by the same artist on / off |
+| <kbd>?</kbd> / <kbd>Esc</kbd> | Shortcut help (<kbd>Esc</kbd> also closes the sources panel) |
 
 Fit and title settings are saved in the browser profile. Play/pause, next, previous and seek drive Spotify over MPRIS, so they need Linux. Elsewhere those buttons are hidden and the rest works.
+
+### Clip sources
+
+The gear button (or <kbd>S</kbd>) opens the sources panel: preset buttons, then one row per source with a checkbox and up/down buttons. A green dot marks the sources that have a clip for the playing track right now. The service walks the enabled sources from the top and plays the first one that has a clip. The cover is always the last resort, even when switched off, so the screen is never black; enabled and moved up, it hides everything below it.
+
+| Source | What it is |
+|---|---|
+| Your clip | A video or GIF you dropped on the display for this track |
+| Spotify Canvas | The track's own Canvas |
+| Community clip | A clip from the community site (`CANVAS_COMMUNITY`) |
+| Music-video loop | An 8 s seamless loop cut from the YouTube music video, ready about 15 s after the track starts |
+| Artist's other clip | A cached clip from another track by the same primary artist |
+| Music video | The full video, muted, kept in sync with the song |
+| Cover art | The ambient cover |
+
+| Preset | Order and switches |
+|---|---|
+| Canvas first (default) | Your clip, Spotify, community, loop, artist, cover. The full video is off |
+| Music video | Your clip, **full video**, Spotify, community, loop, artist, cover |
+| Loops only | Your clip, Spotify, community, loop, cover. Artist and full video are off |
+| Spotify only | Spotify, cover |
+| Cover only | Cover |
+
+The music-video loop and the full video are generated in the background, and only when they come up in your order with nothing better ready: the display shows the best clip it has, then upgrades when the generated one finishes. Neither is generated while it is switched off, and neither is ever uploaded to the community site. A track pinned with <kbd>V</kbd> keeps its source for as long as that source is ready, whatever the order says, and nothing is generated for it.
+
+The full video is the video-only stream at 720p or less, so a track costs about 20 to 40 MB (the cache keeps the most recent 1 GB). The page seeks it when it drifts more than 0.35 s from the song, holds the last frame if the song outlasts the video, and doesn't compensate for an intro that the video has and the song doesn't.
+
+Order, switches and pins are saved by the service in `settings.json` in the cache directory, not in the browser, so every display shows the same choices and the service knows which clips are worth generating.
 
 ### Window and pin modes
 
@@ -169,7 +207,9 @@ Set `CANVAS_MODE` in `~/.config/spotify-canvas/kiosk.env`, then `systemctl --use
 | Variable | Where | Default | Meaning |
 |---|---|---|---|
 | `CANVAS_PORT` | service, kiosk | `47800` | Port on `127.0.0.1` |
-| `CANVAS_CACHE` | service | `~/.cache/spotify-canvas` | Converted clips and lookup results |
+| `CANVAS_CACHE` | service | `~/.cache/spotify-canvas` | Converted clips, lookup results and `settings.json` |
+| `CANVAS_MV` | service | `1` | `0` turns off generating music-video loops and full videos (cached ones still show) |
+| `CANVAS_VIDEO_CACHE_MB` | service | `1024` | Size cap for downloaded full music videos, least recently played removed first |
 | `CANVAS_MODE` | `kiosk.env` | `window` | `window` or `pin`, see above |
 | `CANVAS_MONITOR` | `kiosk.env` | `DP-1` | Connector name. Pin mode stays there; window mode opens there the first time |
 | `CANVAS_BROWSER` | `kiosk.env` | `brave-browser` | Any Chromium-based browser, e.g. `google-chrome` |
@@ -186,7 +226,8 @@ Set the service's variables with `systemctl --user edit spotify-canvas` (`[Servi
 |---|---|
 | Display stuck on an old track | `curl -s 127.0.0.1:47800/health`. With `"mpris": false` the service can't see Spotify on the session bus, so it depends on the extension, and a silent extension leaves the last track up. The display falls back to paused after 3 minutes without reports. Is Spotify running? `busctl --user list \| grep mpris` |
 | Black screen, nothing playing | Is the display turned off in Spotify's profile menu? `curl -sN 127.0.0.1:47800/events` shows `"enabled": false` then |
-| Cover art instead of a clip | The track has no Canvas, or the source had an error (retried after 15 minutes). `journalctl --user -u spotify-canvas` logs `no canvas` / `error` per track |
+| Cover art instead of a clip | The track has no clip in any enabled source (open the sources panel with <kbd>S</kbd>: a green dot marks what is ready), or the source had an error (retried after 15 minutes). `journalctl --user -u spotify-canvas` logs `no canvas` / `error` per track |
+| Music video never appears | The source is off, or a source above it had a clip. Needs `yt-dlp` and `ffmpeg`; `journalctl` shows `no usable music video` when none matched the song, which is retried after a week |
 | Playback buttons missing | No MPRIS (not Linux, or Spotify isn't on the bus). The display still follows the extension |
 | Window doesn't open | `journalctl --user -u spotify-canvas-kiosk`. In pin mode, `... not active, waiting` means `CANVAS_MONITOR` is wrong |
 | Spotify crashes on start or shows a blank window | See [Spotify GPU crash on Wayland](#spotify-gpu-crash-on-wayland) |
@@ -200,11 +241,16 @@ Listens on `127.0.0.1` only.
 | Endpoint | Result |
 |---|---|
 | `GET /view` | The display page |
-| `GET /events` | SSE stream of the state: `{enabled,id,title,artist,cover,duration,position,playing,controls,canvas,age}`. `canvas` is `"/canvas/<id>.webm"`, `"pending"` or `null`; `age` is ms since the state was reported; `controls` is true while MPRIS is available. 15 s keep-alive pings |
+| `GET /events` | SSE stream of the state: `{enabled,id,title,artist,cover,duration,position,playing,controls,canvas,source,mode,available,pin,settings,age}`. `canvas` is the clip's URL, `"pending"` while the track is being looked up, or `null` (the page shows the cover); `source` is the chosen source id; `mode` is `"loop"` or `"sync"` (the full music video, which the page keeps at the song position); `available` lists the source ids that have a clip for the track now, in your order; `pin` is the track's pinned source or `null`; `settings` is `{order,enabled}`; `age` is ms since the state was reported; `controls` is true while MPRIS is available. 15 s keep-alive pings |
+| `GET /settings` | `{"order":[7 source ids],"enabled":{id:bool},"pins":{trackId:id}}`. Same origin only |
+| `POST /settings` | Any of `{"order":[...],"enabled":{...},"pins":{...}}`. `order` must list all seven ids once (`custom`, `spotify`, `community`, `mv`, `artist`, `video`, `cover`); `enabled` maps known ids to booleans and is merged; `pins` maps track ids to a source id, or `null` to unpin, and is merged (the newest 2000 are kept). Anything else is `400 {"reason":"invalid","error":...}`. Same origin only (`403` otherwise), body up to 64 KB. The playing track is re-picked at once |
 | `POST /control` | `{"action":"playpause"\|"play"\|"pause"\|"next"\|"previous"}` or `{"action":"seek","position":ms}`. Same origin only: other web pages get `403`, so they can't control your player. `503` without MPRIS |
 | `POST /nowplaying` | From the extension: JSON `{enabled,id,title,artist,cover,duration,position,playing}`, sent as `text/plain` so there's no CORS preflight |
-| `GET /lookup/<trackId>` | `200 {"ok":true,"width":720,"height":1280}` once converted · `404 {"reason":"no-canvas"}` · `502 {"reason":"error"}` |
-| `GET /canvas/<trackId>.webm` | `video/webm` from the cache, with Range support. `404 not-cached` if missing |
+| `GET /lookup/<trackId>` | `200 {"ok":true}` once cached · `404 {"reason":"no-canvas"}` · `502 {"reason":"error"}` |
+| `GET /canvas/<trackId>.mp4` | The clip as Spotify serves it (`video/mp4`, H.264), with Range support. `404 not-cached` if missing |
+| `GET /canvas/<trackId>.webm` | VP9 copy, made with ffmpeg on first request (~5 s). The page only asks for it when the browser can't play H.264 |
+| `GET /mv/<trackId>.mp4` | The 8 s music-video loop, with Range support |
+| `GET /mv/<trackId>.full.mp4` | The full music video (video only, 720p or less, H.264 where YouTube has it), with Range support so the page can seek it |
 | `GET /health` | `{"ok":true,"mpris":true}` |
 
 ### Now-playing sources
@@ -216,11 +262,14 @@ Listens on `127.0.0.1` only.
 
 - One canvasdownloader request per track, at least 2 s apart, only for the track that's playing (never the queue).
 - Results are cached on disk. "No canvas" is re-checked after 7 days, errors after 15 minutes.
-- Clips are converted to VP9 WebM at most 720x1280, no audio, at low CPU priority. The cache is LRU-pruned at 512 MB.
+- Music-video loops and full videos use yt-dlp against YouTube, one at a time, only for the playing track and only when the source is enabled and reached in the order. "No usable video" is remembered for a week, a failed download for 15 minutes.
+- Clips are stored untouched, typically 0.5 to 4 MB each. The cache is LRU-pruned at 512 MB.
 
 ### Display page
 
-- **Canvas**: a muted, looping `<video>`, `object-fit: cover` (fill) or `contain` over a blurred cover (fit). A clip that fails to decode is retried 3 times, then falls back to the cover.
+- **Clip**: a muted `<video>`, `object-fit: cover` (fill) or `contain` over a blurred cover (fit), crossfading when the source changes. Loops (`mode: "loop"`) repeat. The full music video (`mode: "sync"`) does not loop: every 200 ms the page compares its `currentTime` with the song position and seeks when they differ by more than 0.35 s, pauses with Spotify, and holds the last frame when the song outlasts it. A clip that fails to decode is retried 3 times, then falls back to the cover.
+- **Cover**: when no enabled source has a clip, the cover centred over an ambient field: three copies of the cover turning at different speeds, drawn at 48x48 and blurred by the GPU.
+- **Sources panel**: edits go to `POST /settings`, and the page follows the `settings` in the state stream, so several displays stay in step.
 - **Overlay**: title, artist and a progress bar over a soft bottom gradient. The bar runs locally from position, duration and play state, so it moves smoothly between updates.
 - **Events**: `EventSource` reconnects on its own, and the page re-opens the stream if the browser gives up.
 
