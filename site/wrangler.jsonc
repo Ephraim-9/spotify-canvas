@@ -1,0 +1,45 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "loopboard",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-01",
+
+  // Static files (CSS, JS, icons). Anything not found here falls through to the Worker.
+  "assets": { "directory": "./public" },
+
+  // Workers Logs would record request metadata (incl. client IPs). Keep it off.
+  "observability": { "enabled": false },
+
+  "vars": {
+    "SITE_NAME": "Loopboard",
+    // Shown in the footer and privacy page for takedown requests. FILL IN.
+    "CONTACT_EMAIL": "takedown@example.com",
+    // Comma-separated emails that may use /admin after signing in. FILL IN.
+    "ADMIN_EMAILS": ""
+  },
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "loopboard",
+      // FILL IN: the id printed by `wrangler d1 create loopboard`.
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+
+  "r2_buckets": [
+    {
+      "binding": "CLIPS",
+      // FILL IN if you name the bucket differently in `wrangler r2 bucket create`.
+      "bucket_name": "loopboard-clips"
+    }
+  ]
+
+  // Secrets (set with `wrangler secret put <NAME>`, never here):
+  //   ADMIN_TOKEN, HASH_SECRET,
+  //   GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET
+  //
+  // Custom domain (the Cache API used for index.json only works on one):
+  // "routes": [{ "pattern": "loops.example.com", "custom_domain": true }]
+}
