@@ -1,5 +1,5 @@
 [Unit]
-Description=Spotify Canvas full-screen display (Brave kiosk on one monitor)
+Description=Spotify Canvas display (Brave app window)
 After=graphical-session.target spotify-canvas.service
 PartOf=graphical-session.target
 Wants=spotify-canvas.service
