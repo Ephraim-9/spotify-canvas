@@ -6,36 +6,118 @@
 <title>Canvas</title>
 <style>
   :root { --fade: 900ms; }
-  * { box-sizing: border-box; cursor: none !important; }
+  * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; background: #000; overflow: hidden; color: #fff;
     font-family: "Inter", "Cantarell", system-ui, sans-serif; -webkit-font-smoothing: antialiased; user-select: none; }
-  #stage { position: fixed; inset: 0; }
+  body:not(.awake) { cursor: none; }
+  #stage, #backdrop { position: fixed; inset: 0; }
   .layer { position: absolute; inset: 0; opacity: 0; transition: opacity var(--fade) ease; overflow: hidden; }
   .layer.on { opacity: 1; }
   .layer video, .layer img { width: 100%; height: 100%; object-fit: cover; display: block; }
-  /* No Canvas: the square cover fills the portrait screen and pans slowly across the cropped art */
+  /* No Canvas: the square cover fills the screen and pans slowly across the cropped art */
   .layer.cover img { animation: drift 48s ease-in-out infinite alternate; transform: scale(1.04); filter: saturate(1.05); }
   @keyframes drift { from { object-position: 0% 50%; } to { object-position: 100% 50%; } }
-  #shade { position: fixed; left: 0; right: 0; bottom: 0; height: 42vh; pointer-events: none;
+  /* Fit mode: whole clip visible, blurred cover behind it */
+  #backdrop { opacity: 0; transition: opacity var(--fade) ease; background: center / cover no-repeat;
+    filter: blur(48px) brightness(.45) saturate(1.2); transform: scale(1.2); }
+  body.fit #backdrop { opacity: 1; }
+  body.fit .layer video, body.fit .layer.cover img { object-fit: contain; animation: none; transform: none; }
+
+  #shade { position: fixed; left: 0; right: 0; bottom: 0; height: 42vh; pointer-events: none; transition: opacity 400ms ease;
     background: linear-gradient(to bottom, rgba(0,0,0,0) 0%, rgba(0,0,0,.35) 45%, rgba(0,0,0,.78) 100%); }
-  #info { position: fixed; left: 6vw; right: 6vw; bottom: 6.5vh; transition: opacity 400ms ease; }
-  #title { font-size: clamp(22px, 3.6vw, 46px); font-weight: 700; letter-spacing: -.01em; line-height: 1.15;
+  #info { position: fixed; left: 6vw; right: 6vw; bottom: 5vh; transition: opacity 400ms ease; }
+  #title { font-size: clamp(20px, 3.6vw, 46px); font-weight: 700; letter-spacing: -.01em; line-height: 1.15;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-shadow: 0 1px 12px rgba(0,0,0,.35); }
-  #artist { margin-top: .35em; font-size: clamp(15px, 2.4vw, 30px); opacity: .72; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  #bar { margin-top: 2.6vh; height: 3px; border-radius: 2px; background: rgba(255,255,255,.28); overflow: hidden; }
-  #fill { height: 100%; width: 0; background: #fff; border-radius: 2px; }
+  #artist { margin-top: .35em; font-size: clamp(14px, 2.4vw, 30px); opacity: .72; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  /* Progress bar: thin when idle, grows into a seek bar when the controls are awake */
+  #seek { margin-top: 2.2vh; padding: 8px 0; cursor: default; touch-action: none; }
+  body.awake.controls #seek { cursor: pointer; }
+  #bar { position: relative; height: 3px; border-radius: 2px; background: rgba(255,255,255,.28); transition: height 160ms ease; }
+  body.awake.controls #bar { height: 6px; }
+  #fill { height: 100%; width: 0; background: #fff; border-radius: inherit; }
+  #knob { position: absolute; top: 50%; width: 14px; height: 14px; margin: -7px 0 0 -7px; border-radius: 50%; background: #fff;
+    opacity: 0; transition: opacity 160ms ease; box-shadow: 0 1px 6px rgba(0,0,0,.4); }
+  body.awake.controls #knob { opacity: 1; }
+  #times { display: flex; justify-content: space-between; font-size: 13px; opacity: 0; transition: opacity 300ms ease;
+    font-variant-numeric: tabular-nums; color: rgba(255,255,255,.7); }
+
+  #ctl { display: flex; align-items: center; justify-content: center; gap: 18px; margin-top: 10px; height: 0; overflow: hidden;
+    opacity: 0; transition: opacity 300ms ease, height 300ms ease; }
+  body.awake #times { opacity: 1; }
+  body.awake #ctl { opacity: 1; height: 64px; }
+  body:not(.controls) .mpris { display: none; }
+  button { all: unset; display: grid; place-items: center; width: 44px; height: 44px; border-radius: 50%; cursor: pointer;
+    color: rgba(255,255,255,.85); transition: background 150ms ease, color 150ms ease, transform 100ms ease; }
+  button:hover { background: rgba(255,255,255,.12); color: #fff; }
+  button:active { transform: scale(.94); }
+  button:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+  button svg { width: 22px; height: 22px; fill: currentColor; }
+  #play { width: 56px; height: 56px; background: #fff; color: #000; }
+  #play:hover { background: #fff; transform: scale(1.05); }
+  #play svg { width: 26px; height: 26px; }
+  .spacer { flex: 1; }
+  button.on { color: #1ed760; }
+
+  body.noinfo #title, body.noinfo #artist { display: none; }
+  body.noinfo:not(.awake) #shade, body.noinfo:not(.awake) #info { opacity: 0; }
   body.idle #info, body.idle #shade { opacity: 0; }
+
+  #toast { position: fixed; top: 24px; left: 50%; transform: translateX(-50%); padding: 8px 14px; border-radius: 8px;
+    background: rgba(0,0,0,.6); font-size: 14px; opacity: 0; transition: opacity 250ms ease; pointer-events: none; }
+  #toast.show { opacity: 1; }
+  #help { position: fixed; inset: 0; display: none; place-items: center; background: rgba(0,0,0,.72); }
+  #help.show { display: grid; }
+  #help table { font-size: 15px; border-spacing: 18px 8px; }
+  #help kbd { font: inherit; padding: 2px 8px; border-radius: 5px; background: rgba(255,255,255,.14); }
 </style>
 </head>
 <body class="idle">
+<div id="backdrop"></div>
 <div id="stage"></div>
 <div id="shade"></div>
-<div id="info"><div id="title"></div><div id="artist"></div><div id="bar"><div id="fill"></div></div></div>
+<div id="info">
+  <div id="title"></div><div id="artist"></div>
+  <div id="seek"><div id="bar"><div id="fill"></div><div id="knob"></div></div></div>
+  <div id="times"><span id="cur">0:00</span><span id="dur">0:00</span></div>
+  <div id="ctl">
+    <button id="info-btn" title="Show title and artist (I)"><svg viewBox="0 0 24 24"><path d="M11 7h2v2h-2zm0 4h2v6h-2zm1-9a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16z"/></svg></button>
+    <button id="fit" title="Fit whole clip / fill screen (C)"><svg viewBox="0 0 24 24"><path d="M19 12h-2v3h-3v2h5v-5zM7 9h3V7H5v5h2V9zm14-6H3a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h18a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zm0 16H3V5h18v14z"/></svg></button>
+    <span class="spacer"></span>
+    <button id="prev" class="mpris" title="Previous (P)"><svg viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6 8.5 6V6z"/></svg></button>
+    <button id="play" class="mpris" title="Play/pause (Space)"><svg viewBox="0 0 24 24"><path id="play-path" d="M8 5v14l11-7z"/></svg></button>
+    <button id="next" class="mpris" title="Next (N)"><svg viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg></button>
+    <span class="spacer"></span>
+    <button id="help-btn" title="Shortcuts (?)"><svg viewBox="0 0 24 24"><path d="M11 18h2v-2h-2v2zm1-16a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16zm0-14a4 4 0 0 0-4 4h2a2 2 0 1 1 4 0c0 2-3 1.75-3 5h2c0-2.25 3-2.5 3-5a4 4 0 0 0-4-4z"/></svg></button>
+    <button id="fs" title="Full screen (F, double-click)"><svg viewBox="0 0 24 24"><path id="fs-path" d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg></button>
+  </div>
+</div>
+<div id="toast"></div>
+<div id="help"><table>
+  <tr><td><kbd>Space</kbd> <kbd>K</kbd></td><td>Play / pause</td></tr>
+  <tr><td><kbd>N</kbd> <kbd>P</kbd></td><td>Next / previous track</td></tr>
+  <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>Seek 10 s</td></tr>
+  <tr><td><kbd>F</kbd> or double-click</td><td>Full screen</td></tr>
+  <tr><td><kbd>C</kbd></td><td>Fit whole clip / fill screen</td></tr>
+  <tr><td><kbd>I</kbd></td><td>Show / hide title and artist</td></tr>
+  <tr><td><kbd>?</kbd> <kbd>Esc</kbd></td><td>This help</td></tr>
+</table></div>
 <script>
 "use strict";
 const $ = id => document.getElementById(id);
-const stage = $("stage");
+const stage = $("stage"), body = document.body;
 let st = {}, recvAt = 0, layer = null, layerKey = null;
+
+// ---------- preferences (per browser profile) ----------
+const prefs = (() => { try { return JSON.parse(localStorage.getItem("canvas:prefs")) || {}; } catch { return {}; } })();
+function setPref(k, v) { prefs[k] = v; try { localStorage.setItem("canvas:prefs", JSON.stringify(prefs)); } catch {} applyPrefs(); }
+function applyPrefs() {
+  body.classList.toggle("fit", !!prefs.fit);
+  body.classList.toggle("noinfo", !!prefs.noinfo);
+  $("fit").classList.toggle("on", !!prefs.fit);
+  $("info-btn").classList.toggle("on", !prefs.noinfo);
+}
+applyPrefs();
 
 // ---------- layers (crossfade) ----------
 function show(key, make) {
@@ -81,11 +163,16 @@ function onMediaError(el, key) {
 }
 
 // ---------- render ----------
+const PLAY = "M8 5v14l11-7z", PAUSE = "M6 19h4V5H6v14zm8-14v14h4V5h-4z";
 function render() {
-  document.body.classList.toggle("idle", !st.enabled || !st.id);
+  body.classList.toggle("idle", !st.enabled || !st.id);
+  body.classList.toggle("controls", !!st.controls);
+  $("play-path").setAttribute("d", st.playing ? PAUSE : PLAY);
+  $("backdrop").style.backgroundImage = st.cover ? `url("${st.cover}")` : "none";
   if (!st.enabled || !st.id) return show(null);
   $("title").textContent = st.title || "";
   $("artist").textContent = st.artist || "";
+  document.title = st.title ? `${st.title} · ${st.artist}` : "Canvas";
   const vk = "v:" + st.canvas, ck = "c:" + st.cover;
   if (st.canvas && st.canvas !== "pending" && ok(vk)) show(vk, () => videoLayer(st.canvas));
   else if (st.canvas === "pending" && layerKey === "v:/canvas/" + st.id + ".webm") {}  // same track re-enabled: keep the clip
@@ -103,10 +190,85 @@ function position() {
   const p = st.position + (st.playing ? (st.age || 0) + performance.now() - recvAt : 0);
   return Math.min(p, st.duration);
 }
+const fmt = ms => { const s = Math.floor(ms / 1000); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
+let dragAt = null; // ms while the seek bar is being dragged
 (function tick() {
-  $("fill").style.width = (st.duration ? position() / st.duration * 100 : 0).toFixed(3) + "%";
+  const p = dragAt ?? position();
+  const pct = (st.duration ? p / st.duration * 100 : 0).toFixed(3) + "%";
+  $("fill").style.width = pct; $("knob").style.left = pct;
+  $("cur").textContent = fmt(p); $("dur").textContent = fmt(st.duration || 0);
   requestAnimationFrame(tick);
 })();
+
+// ---------- controls ----------
+let toastT;
+function toast(msg) { const t = $("toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove("show"), 1600); }
+async function control(action, extra) {
+  if (!st.controls) return toast("Playback controls need Spotify on Linux (MPRIS)");
+  try {
+    const r = await fetch("/control", { method: "POST", body: JSON.stringify({ action, ...extra }) });
+    if (!r.ok) toast("Spotify didn't respond");
+  } catch { toast("Canvas service unreachable"); }
+}
+function playPause() {
+  if (st.controls) { st = { ...st, position: position(), age: 0, playing: !st.playing }; recvAt = performance.now(); render(); }
+  control("playpause");
+}
+function seekTo(ms) {
+  ms = Math.max(0, Math.min(ms, (st.duration || 0) - 500));
+  st = { ...st, position: ms, age: 0 }; recvAt = performance.now();
+  control("seek", { position: Math.round(ms) });
+}
+const fullscreen = () => document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen().catch(() => {});
+document.addEventListener("fullscreenchange", () => $("fs-path").setAttribute("d", document.fullscreenElement
+  ? "M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z"
+  : "M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"));
+
+$("play").onclick = playPause;
+$("next").onclick = () => control("next");
+$("prev").onclick = () => control("previous");
+$("fs").onclick = fullscreen;
+$("fit").onclick = () => setPref("fit", !prefs.fit);
+$("info-btn").onclick = () => setPref("noinfo", !prefs.noinfo);
+$("help-btn").onclick = () => $("help").classList.toggle("show");
+$("help").onclick = () => $("help").classList.remove("show");
+for (const b of document.querySelectorAll("button")) b.addEventListener("dblclick", e => e.stopPropagation());
+document.addEventListener("dblclick", e => { if (!e.target.closest("#info")) fullscreen(); });
+
+// seek bar: click or drag
+const seekEl = $("seek");
+const atX = x => { const r = $("bar").getBoundingClientRect(); return Math.max(0, Math.min(1, (x - r.left) / r.width)) * (st.duration || 0); };
+seekEl.addEventListener("pointerdown", e => {
+  if (!st.controls || !st.duration || !body.classList.contains("awake")) return;
+  seekEl.setPointerCapture(e.pointerId); dragAt = atX(e.clientX);
+});
+seekEl.addEventListener("pointermove", e => { if (dragAt !== null) dragAt = atX(e.clientX); });
+seekEl.addEventListener("pointerup", e => { if (dragAt === null) return; const ms = atX(e.clientX); dragAt = null; seekTo(ms); });
+seekEl.addEventListener("pointercancel", () => { dragAt = null; });
+
+document.addEventListener("keydown", e => {
+  if (e.ctrlKey || e.altKey || e.metaKey) return;
+  const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  const act = {
+    " ": playPause, k: playPause, n: () => control("next"), p: () => control("previous"),
+    ArrowRight: () => e.shiftKey ? control("next") : seekTo(position() + 10000),
+    ArrowLeft: () => e.shiftKey ? control("previous") : seekTo(position() - 10000),
+    f: fullscreen, c: () => setPref("fit", !prefs.fit), i: () => setPref("noinfo", !prefs.noinfo),
+    "?": () => $("help").classList.toggle("show"), Escape: () => $("help").classList.remove("show"),
+  }[k];
+  if (!act) return;
+  e.preventDefault(); act(); wake();
+});
+
+// controls and cursor appear on activity, fade after a few seconds
+let sleepT;
+function wake() {
+  body.classList.add("awake");
+  clearTimeout(sleepT);
+  sleepT = setTimeout(() => { if (dragAt === null && !$("info").matches(":hover")) body.classList.remove("awake"); else wake(); }, 2800);
+}
+for (const ev of ["pointermove", "pointerdown", "touchstart", "wheel"]) document.addEventListener(ev, wake, { passive: true });
+document.addEventListener("pointerleave", () => { clearTimeout(sleepT); body.classList.remove("awake"); });
 
 // ---------- events (EventSource reconnects by itself; recreate it if it gives up) ----------
 let es;

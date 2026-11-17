@@ -1,20 +1,25 @@
 #!/usr/bin/python3 -I
-"""Full-screen Spotify Canvas display on one monitor, as a Brave kiosk window, kept in place.
+"""Spotify Canvas display as a Brave app window.
 
   spotify-canvas-kiosk             run in the foreground (what spotify-canvas-kiosk.service does)
   spotify-canvas-kiosk geometry    print the target monitor's logical x y w h
 
 Env (set in ~/.config/spotify-canvas/kiosk.env for the service):
-  CANVAS_MONITOR=DP-1           connector name, e.g. HDMI-2 (see `gnome-monitor-config list` or Settings > Displays)
+  CANVAS_MODE=window            window: a normal window you can move, resize and full-screen (F / double-click);
+                                its size and position are remembered. Closing it ends the service until next login.
+                                pin: full-screen kiosk on CANVAS_MONITOR, put back if moved, closed or crashed.
+  CANVAS_MONITOR=DP-1           connector name, e.g. HDMI-2 (see `gnome-monitor-config list` or Settings > Displays);
+                                in window mode only the first launch is placed there
   CANVAS_BROWSER=brave-browser  any Chromium-based browser
   CANVAS_KIOSK_FLAGS=...        extra browser flags (e.g. a temporary --remote-debugging-port)
 
-The browser runs under Xwayland (Wayland clients cannot choose their position): the window is created at the
-monitor's origin and --kiosk fullscreens it there. Every few seconds the window's X geometry is checked; if it was
+The browser runs under Xwayland (Wayland clients cannot choose or restore their position). In pin mode the window
+is created at the monitor's origin and --kiosk fullscreens it there. Every few seconds the window's X geometry is checked; if it was
 moved off the monitor, closed, or crashed, or the monitor came back after being unplugged, the browser is relaunched.
 """
-import ctypes, ctypes.util, os, re, shlex, signal, subprocess, sys, time, urllib.request
+import ctypes, ctypes.util, json, os, re, shlex, signal, subprocess, sys, time, urllib.request
 
+MODE = os.environ.get("CANVAS_MODE", "window")
 MONITOR = os.environ.get("CANVAS_MONITOR", "DP-1")
 BROWSER = os.environ.get("CANVAS_BROWSER", "brave-browser")
 PROFILE = os.path.expanduser(os.environ.get("CANVAS_KIOSK_PROFILE", "~/.local/share/spotify-canvas/kiosk-profile"))
@@ -104,11 +109,27 @@ class X11:
         return i[2].value, i[3].value, u[0].value, u[1].value
 
 
+def placed_before():
+    """True once the browser has saved this app window's bounds, which it restores itself."""
+    try:
+        with open(os.path.join(PROFILE, "Default", "Preferences")) as f:
+            return bool(json.load(f).get("browser", {}).get("app_window_placement"))
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
 def launch(g):
-    x, y, w, h = g
     os.makedirs(PROFILE, exist_ok=True)
-    cmd = [BROWSER, "--user-data-dir=" + PROFILE, "--ozone-platform=x11", "--class=" + WM_CLASS,
-           "--window-position=%d,%d" % (x, y), "--window-size=%d,%d" % (w, h), "--kiosk", "http://127.0.0.1:%s/view" % PORT,
+    url = "http://127.0.0.1:%s/view" % PORT
+    if MODE == "pin":
+        x, y, w, h = g
+        where = ["--window-position=%d,%d" % (x, y), "--window-size=%d,%d" % (w, h), "--kiosk", url]
+    else:
+        where = ["--app=" + url]
+        if g and not placed_before():  # first run: open on the canvas monitor at its full size
+            x, y, w, h = g
+            where += ["--window-position=%d,%d" % (x, y), "--window-size=%d,%d" % (w, h)]
+    cmd = [BROWSER, "--user-data-dir=" + PROFILE, "--ozone-platform=x11", "--class=" + WM_CLASS] + where + [
            "--no-first-run", "--no-default-browser-check", "--noerrdialogs", "--disable-session-crashed-bubble",
            "--password-store=basic", "--autoplay-policy=no-user-gesture-required", "--disable-accelerated-video-decode",
            "--disable-features=Translate,MediaRouter,GlobalMediaControls"] + shlex.split(os.environ.get("CANVAS_KIOSK_FLAGS", ""))
@@ -138,10 +159,16 @@ def main():
             break
         except OSError:
             time.sleep(1)
-    xl, p, target, since = X11(), None, None, 0.0
-    signal.signal(signal.SIGTERM, lambda *_: (kill(p), sys.exit(0)))
     # a stale kiosk from an earlier run would hold the profile lock and swallow our launch
     subprocess.run(["pkill", "-u", str(os.getuid()), "-f", "--", "--user-data-dir=" + PROFILE + "( |$)"])
+    if MODE != "pin":
+        p = launch(geometry())
+        signal.signal(signal.SIGTERM, lambda *_: (kill(p), sys.exit(0)))
+        rc = p.wait()  # closed by the user: exit 0 and stay closed; a crash exits non-zero and systemd restarts it
+        log("window exited (%d)" % rc)
+        sys.exit(rc if rc > 0 else 0)
+    xl, p, target, since = X11(), None, None, 0.0
+    signal.signal(signal.SIGTERM, lambda *_: (kill(p), sys.exit(0)))
     while True:
         g = geometry()
         if g != target:  # monitor appeared, disappeared or changed mode

@@ -2,6 +2,8 @@
 """Local Spotify Canvas service: converter + now-playing hub for the full-screen Canvas display.
 
 POST /nowplaying            now-playing state from the Spicetify extension (text/plain JSON body)
+POST /control               {"action": "playpause"|"next"|"previous"|"seek", "position": ms}, same-origin only;
+                            drives Spotify over MPRIS (Linux), 503 when Spotify is not on the session bus
 GET /events                 SSE stream of the current state, as JSON "data:" events
 GET /view                   the full-screen display page (view.html next to this file)
 GET /lookup/<trackId>       200 {"ok":true,"width":..,"height":..} once the WebM is cached
@@ -12,6 +14,9 @@ GET /health                 200 {"ok":true}
 
 Source: canvasdownloader.com, one request per track (results cached on disk).
 Spotify's own Canvas API is unavailable in PK, so this is the only source.
+
+Now playing: on Linux the service reads Spotify's MPRIS interface over D-Bus (busctl) once a second, which needs
+nothing inside Spotify. The extension's reports are used only while MPRIS is unavailable (macOS, Windows, no bus).
 """
 import json, os, re, shutil, subprocess, tempfile, threading, time, urllib.parse, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -26,6 +31,7 @@ UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chr
 TRACK_RE = re.compile(r"^[A-Za-z0-9]{22}$")
 MP4_RE = re.compile(r"https://canvaz\.scdn\.co/[^\"' <>]+\.mp4")
 
+ORIGINS = ("http://127.0.0.1:%d" % PORT, "http://localhost:%d" % PORT)
 VIEW = os.path.join(os.path.dirname(os.path.abspath(__file__)), "view.html")
 MAX_BODY = 8192
 
@@ -150,9 +156,13 @@ def resolve(tid):
 
 
 # ---------- now playing hub ----------
-_state = {"id": None, "enabled": False, "canvas": None}
+_state = {"id": None, "enabled": False, "canvas": None, "controls": False}
 _cond = threading.Condition()
 _version = [0]
+_enabled = [True]       # the extension's "Canvas display" menu toggle
+_mpris_at = [0.0]       # last successful MPRIS read
+_poke = threading.Event()
+STALE = 180             # s without any report before a "playing" state is treated as paused
 
 
 def publish(**changes):
@@ -166,7 +176,7 @@ def publish(**changes):
 def snapshot():
     with _cond:
         snap = dict(_state)
-        snap["age"] = int((time.time() - snap.pop("t", time.time())) * 1000)  # ms since the extension reported
+        snap["age"] = int((time.time() - snap.pop("t", time.time())) * 1000)  # ms since the state was reported
         return _version[0], snap
 
 
@@ -178,23 +188,119 @@ def look_up_for_display(tid):
     publish(canvas="/canvas/%s.webm" % tid if code == 200 else None)
 
 
+def apply(tid, fields):
+    """Publish a now-playing report; starts the Canvas lookup when the track changed."""
+    if not _enabled[0]:
+        return
+    with _cond:
+        changed = tid != _state["id"] or not _state["enabled"]
+    if not changed:
+        return publish(enabled=True, **fields)
+    publish(id=tid, enabled=True, canvas="pending" if tid else None, **fields)
+    if tid:
+        threading.Thread(target=look_up_for_display, args=(tid,), daemon=True).start()
+
+
+def mpris_live():
+    return time.time() - _mpris_at[0] < 5
+
+
 def on_nowplaying(d):
-    if not d.get("enabled", True):
+    _enabled[0] = bool(d.get("enabled", True))
+    if not _enabled[0]:
         return publish(enabled=False, canvas=None, id=None)
+    if mpris_live():  # MPRIS is the source of truth; just make the next poll republish if we were disabled
+        return _poke.set()
     tid = d.get("id") if isinstance(d.get("id"), str) and TRACK_RE.match(d.get("id")) else None
     s = lambda k, n=300: str(d.get(k) or "")[:n]
     num = lambda k: max(0, int(d.get(k) or 0)) if isinstance(d.get(k), (int, float)) else 0
     cover = s("cover", 500)
-    fields = dict(enabled=True, title=s("title"), artist=s("artist"),
-                  cover=cover if cover.startswith("https://") else "",
-                  duration=num("duration"), position=num("position"), playing=bool(d.get("playing")))
+    apply(tid, dict(title=s("title"), artist=s("artist"), cover=cover if cover.startswith("https://") else "",
+                    duration=num("duration"), position=num("position"), playing=bool(d.get("playing"))))
+
+
+# ---------- MPRIS (Linux) ----------
+MPRIS = ["busctl", "--user", "--json=short"]
+MPRIS_DEST = ["org.mpris.MediaPlayer2.spotify", "/org/mpris/MediaPlayer2", "org.mpris.MediaPlayer2.Player"]
+TRACKID_RE = re.compile(r"^/com/spotify/track/([A-Za-z0-9]{22})$")
+
+
+def mpris_read():
+    """(track id or None, fields) from Spotify's MPRIS, or None when Spotify is not on the bus."""
+    try:
+        out = subprocess.run(MPRIS + ["get-property"] + MPRIS_DEST + ["Metadata", "PlaybackStatus", "Position"],
+                             capture_output=True, text=True, timeout=3)
+        md, status, pos = (json.loads(line)["data"] for line in out.stdout.splitlines()[:3])
+    except (OSError, subprocess.TimeoutExpired, ValueError, KeyError, TypeError):
+        return None
+    v = lambda k, d="": (md.get(k) or {}).get("data", d)
+    m = TRACKID_RE.match(v("mpris:trackid"))
+    cover = str(v("mpris:artUrl"))
+    if cover.startswith("https://open.spotify.com/image/"):  # older clients
+        cover = "https://i.scdn.co/image/" + cover.rsplit("/", 1)[1]
+    artist = v("xesam:artist", [])
+    return (m.group(1) if m else None), dict(
+        title=str(v("xesam:title"))[:300], artist=", ".join(map(str, artist))[:300] if isinstance(artist, list) else "",
+        cover=cover[:500] if cover.startswith("https://") else "", duration=int(v("mpris:length", 0)) // 1000,
+        position=max(0, int(pos)) // 1000, playing=status == "Playing")
+
+
+def mpris_call(method, *args):
+    try:
+        return subprocess.run(["busctl", "--user", "call"] + MPRIS_DEST + [method] + list(args),
+                              capture_output=True, timeout=3).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def differs(tid, f):
     with _cond:
-        changed = tid != _state["id"] or not _state["enabled"]
-    if not changed:
-        return publish(**fields)
-    publish(id=tid, canvas="pending" if tid else None, **fields)
-    if tid:
-        threading.Thread(target=look_up_for_display, args=(tid,), daemon=True).start()
+        s = dict(_state)
+    if tid != s["id"] or not s["enabled"] or not s["controls"]:
+        return True
+    if any(f[k] != s.get(k) for k in ("title", "artist", "cover", "duration", "playing")):
+        return True
+    expected = s.get("position", 0) + ((time.time() - s.get("t", 0)) * 1000 if s.get("playing") else 0)
+    return abs(f["position"] - expected) > 1500  # seek
+
+
+def mpris_loop():
+    while True:
+        r = mpris_read()
+        if r:
+            _mpris_at[0] = time.time()
+            tid, fields = r
+            if _enabled[0] and differs(tid, fields):
+                apply(tid, dict(fields, controls=True))
+        else:
+            with _cond:
+                was, playing, t = _state["controls"], _state.get("playing"), _state.get("t", 0)
+            if was and not mpris_live():  # Spotify quit or left the bus
+                publish(controls=False, playing=False)
+            elif playing and time.time() - t > STALE:  # extension went quiet: don't show "playing" forever
+                publish(playing=False)
+        _poke.wait(1 if r else 3)
+        _poke.clear()
+
+
+def control(d):
+    """Run a player action over MPRIS. Returns an HTTP status."""
+    if not mpris_live():
+        return 503
+    act = d.get("action")
+    if act in ("playpause", "play", "pause", "next", "previous"):
+        ok = mpris_call({"playpause": "PlayPause", "play": "Play", "pause": "Pause",
+                         "next": "Next", "previous": "Previous"}[act])
+    elif act == "seek" and isinstance(d.get("position"), (int, float)):
+        with _cond:
+            tid = _state["id"]
+        if not tid:
+            return 409
+        ok = mpris_call("SetPosition", "ox", "/com/spotify/track/" + tid, str(max(0, int(d["position"])) * 1000))
+    else:
+        return 400
+    _poke.set()
+    return 200 if ok else 502
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -227,8 +333,12 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_POST(self):
-        if urllib.parse.urlparse(self.path).path != "/nowplaying":
+        path = urllib.parse.urlparse(self.path).path
+        if path not in ("/nowplaying", "/control"):
             return self.send_json(404, {"ok": False})
+        # /control changes playback: only the display page itself (same origin) may call it, not any web page
+        if path == "/control" and self.headers.get("Origin") not in (None, *ORIGINS):
+            return self.send_json(403, {"ok": False})
         n = int(self.headers.get("Content-Length") or 0)
         if not 0 < n <= MAX_BODY:
             return self.send_json(413, {"ok": False})
@@ -238,6 +348,9 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError
         except ValueError:
             return self.send_json(400, {"ok": False, "reason": "bad-json"})
+        if path == "/control":
+            code = control(d)
+            return self.send_json(code, {"ok": code == 200})
         on_nowplaying(d)
         self.send_json(200, {"ok": True})
 
@@ -267,7 +380,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = urllib.parse.urlparse(self.path).path
         if path == "/health":
-            return self.send_json(200, {"ok": True})
+            return self.send_json(200, {"ok": True, "mpris": mpris_live()})
         if path == "/events":
             return self.events()
         if path == "/view":
@@ -324,5 +437,6 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     ThreadingHTTPServer.daemon_threads = True
+    threading.Thread(target=mpris_loop, daemon=True).start()
     log("listening on 127.0.0.1:%d, cache %s" % (PORT, CACHE))
     ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
