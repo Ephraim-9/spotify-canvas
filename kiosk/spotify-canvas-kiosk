@@ -162,10 +162,13 @@ def main():
     # a stale kiosk from an earlier run would hold the profile lock and swallow our launch
     subprocess.run(["pkill", "-u", str(os.getuid()), "-f", "--", "--user-data-dir=" + PROFILE + "( |$)"])
     if MODE != "pin":
-        p = launch(geometry())
+        p, t0 = launch(geometry()), time.time()
         signal.signal(signal.SIGTERM, lambda *_: (kill(p), sys.exit(0)))
         rc = p.wait()  # closed by the user: exit 0 and stay closed; a crash exits non-zero and systemd restarts it
-        log("window exited (%d)" % rc)
+        up = time.time() - t0
+        log("window exited (%d) after %.0fs" % (rc, up))
+        if up < 30:  # nobody closes a window that fast: the browser lost a race with the session at login, so retry
+            sys.exit(rc if rc > 0 else 1)
         sys.exit(rc if rc > 0 else 0)
     xl, p, target, since = X11(), None, None, 0.0
     signal.signal(signal.SIGTERM, lambda *_: (kill(p), sys.exit(0)))
