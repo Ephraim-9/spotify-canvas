@@ -19,7 +19,7 @@ It works in regions where Spotify doesn't serve Canvas. The clips come from [can
 
 - **Edge-to-edge Canvas.** The looping clip fills any window size or orientation; a monitor rotated to portrait looks most like a phone. It pauses when Spotify pauses and crossfades when the track changes.
 - **Playback controls.** Move the mouse to get previous, play/pause, next and a seek bar you can click or drag. Everything fades out again after a few seconds, cursor included.
-- **Fill or fit.** Crop the clip to fill the screen, or show the whole clip on a blurred copy of the cover.
+- **Auto, fit or fill.** Auto fills the screen but shows the whole clip over a blurred cover when its shape is far from the screen's (a 16:9 video on a portrait monitor). Or force either one.
 - **Fast.** A new track's clip shows up about half a second after the song changes. The clip is cached as Spotify serves it, with no re-encode.
 - **Clip sources you order and switch.** Seven sources (your own clip, the track's Spotify Canvas, a community clip, a music-video loop, another clip by the same artist, the full music video, the cover) tried from the top, each with an on/off switch. Presets cover the common setups; <kbd>S</kbd> opens the panel.
 - **Music video, in sync.** The whole video of the song, muted, follows the song position: it pauses, seeks and resumes with Spotify. Made in the background with yt-dlp, only when it is reached in your order, and never published.
@@ -141,14 +141,14 @@ Move the mouse over the display and the controls fade in. They fade out again, c
 | <kbd>N</kbd> / <kbd>P</kbd> (or <kbd>Shift</kbd>+<kbd>→</kbd> / <kbd>←</kbd>) | Next / previous track |
 | <kbd>→</kbd> / <kbd>←</kbd> | Seek 10 s forward / back |
 | <kbd>F</kbd> or double-click | Full screen |
-| <kbd>C</kbd> | Fit the whole clip / fill the screen |
+| <kbd>C</kbd> | Cycle framing: auto / fit / fill |
 | <kbd>I</kbd> | Show / hide title and artist. Hidden, the display shows only the clip until you move the mouse |
 | <kbd>S</kbd> | Clip sources panel: presets, order, on/off |
 | <kbd>V</kbd> / <kbd>Shift</kbd>+<kbd>V</kbd> | Pin this track to its next ready source (cover included) / unpin |
 | <kbd>A</kbd> | Other clips by the same artist on / off |
 | <kbd>?</kbd> / <kbd>Esc</kbd> | Shortcut help (<kbd>Esc</kbd> also closes the sources panel) |
 
-Fit and title settings are saved in the browser profile. Play/pause, next, previous and seek drive Spotify over MPRIS, so they need Linux. Elsewhere those buttons are hidden and the rest works.
+Framing and title settings are saved in the browser profile. Play/pause, next, previous and seek drive Spotify over MPRIS, so they need Linux. Elsewhere those buttons are hidden and the rest works.
 
 ### Clip sources
 
@@ -174,7 +174,7 @@ The gear button (or <kbd>S</kbd>) opens the sources panel: preset buttons, then 
 
 The music-video loop and the full video are generated in the background, and only when they come up in your order with nothing better ready: the display shows the best clip it has, then upgrades when the generated one finishes. Neither is generated while it is switched off, and neither is ever uploaded to the community site. A track pinned with <kbd>V</kbd> keeps its source for as long as that source is ready, whatever the order says, and nothing is generated for it.
 
-The full video is the video-only stream at 720p or less, so a track costs about 20 to 40 MB (the cache keeps the most recent 1 GB). The page seeks it when it drifts more than 0.35 s from the song, holds the last frame if the song outlasts the video, and doesn't compensate for an intro that the video has and the song doesn't.
+The full video is the video-only stream at 1080p or less (`CANVAS_MV_HEIGHT`), so a track costs about 20 to 40 MB (the cache keeps the most recent 1 GB). The page seeks it when it drifts more than 0.35 s from the song, holds the last frame if the song outlasts the video, and doesn't compensate for an intro that the video has and the song doesn't.
 
 Order, switches and pins are saved by the service in `settings.json` in the cache directory, not in the browser, so every display shows the same choices and the service knows which clips are worth generating.
 
@@ -186,7 +186,7 @@ Set `CANVAS_MODE` in `~/.config/spotify-canvas/kiosk.env`, then `systemctl --use
 |---|---|---|
 | Window | Normal app window: move it by the title bar or with Super+drag, resize it, full screen with <kbd>F</kbd> | Full screen on `CANVAS_MONITOR`, no window frame |
 | Position | Remembered by the browser, restored at the next launch | Put back on the monitor if anything moves it |
-| Closed | Stays closed until next login | Reopened within a few seconds |
+| Closed | Stays closed until next login (a window that dies within 30 s of launching counts as a failed start and is retried) | Reopened within a few seconds |
 | Crashed | Reopened by systemd | Reopened |
 | Monitor unplugged | GNOME moves the window to another monitor | Waits, and reopens when the monitor comes back |
 
@@ -203,6 +203,8 @@ Set `CANVAS_MODE` in `~/.config/spotify-canvas/kiosk.env`, then `systemctl --use
 | `CANVAS_PORT` | service, kiosk | `47800` | Port on `127.0.0.1` |
 | `CANVAS_CACHE` | service | `~/.cache/spotify-canvas` | Converted clips, lookup results and `settings.json` |
 | `CANVAS_MV` | service | `1` | `0` turns off generating music-video loops and full videos (cached ones still show) |
+| `CANVAS_MV_HEIGHT` | service | `1080` | Tallest music video downloaded (360–2160). Existing cached loops and videos keep their old size |
+| `CANVAS_MV_CRF` | service | `20` | x264 quality of the 8 s music-video loops (14–35, lower is sharper and bigger) |
 | `CANVAS_VIDEO_CACHE_MB` | service | `1024` | Size cap for downloaded full music videos, least recently played removed first |
 | `CANVAS_MODE` | `kiosk.env` | `window` | `window` or `pin`, see above |
 | `CANVAS_MONITOR` | `kiosk.env` | `DP-1` | Connector name. Pin mode stays there; window mode opens there the first time |
@@ -244,7 +246,7 @@ Listens on `127.0.0.1` only.
 | `GET /canvas/<trackId>.mp4` | The clip as Spotify serves it (`video/mp4`, H.264), with Range support. `404 not-cached` if missing |
 | `GET /canvas/<trackId>.webm` | VP9 copy, made with ffmpeg on first request (~5 s). The page only asks for it when the browser can't play H.264 |
 | `GET /mv/<trackId>.mp4` | The 8 s music-video loop, with Range support |
-| `GET /mv/<trackId>.full.mp4` | The full music video (video only, 720p or less, H.264 where YouTube has it), with Range support so the page can seek it |
+| `GET /mv/<trackId>.full.mp4` | The full music video (video only, `CANVAS_MV_HEIGHT` or less, 1080p by default, H.264 where YouTube has it), with Range support so the page can seek it |
 | `GET /health` | `{"ok":true,"mpris":true}` |
 
 ### Now-playing sources
@@ -261,7 +263,7 @@ Listens on `127.0.0.1` only.
 
 ### Display page
 
-- **Clip**: a muted `<video>`, `object-fit: cover` (fill) or `contain` over a blurred cover (fit), crossfading when the source changes. Loops (`mode: "loop"`) repeat. The full music video (`mode: "sync"`) does not loop: every 200 ms the page compares its `currentTime` with the song position and seeks when they differ by more than 0.35 s, pauses with Spotify, and holds the last frame when the song outlasts it. A clip that fails to decode is retried 3 times, then falls back to the cover.
+- **Clip**: a muted `<video>`, `object-fit: cover` (fill) or `contain` over a blurred cover (fit); auto picks fit when the clip's aspect ratio and the window's differ by more than 1.5×, crossfading when the source changes. Loops (`mode: "loop"`) repeat. The full music video (`mode: "sync"`) does not loop: every 200 ms the page compares its `currentTime` with the song position and seeks when they differ by more than 0.35 s, pauses with Spotify, and holds the last frame when the song outlasts it. A clip that fails to decode is retried 3 times, then falls back to the cover.
 - **Cover**: when no enabled source has a clip, the cover centred over an ambient field: three copies of the cover turning at different speeds, drawn at 48x48 and blurred by the GPU.
 - **Sources panel**: edits go to `POST /settings`, and the page follows the `settings` in the state stream, so several displays stay in step.
 - **Overlay**: title, artist and a progress bar over a soft bottom gradient. The bar runs locally from position, duration and play state, so it moves smoothly between updates.

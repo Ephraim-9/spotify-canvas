@@ -17,7 +17,7 @@ POST /custom/<trackId>      raw video or GIF body, same-origin only: converted t
 DELETE /custom/<trackId>    removes it again (and unpublishes it, with the token)
 GET /custom/<trackId>.mp4   the custom clip
 GET /mv/<trackId>.mp4       the music-video loop
-GET /mv/<trackId>.full.mp4  the full music video (video only, <= 720p), Range supported
+GET /mv/<trackId>.full.mp4  the full music video (video only, <= CANVAS_MV_HEIGHT, default 1080p), Range supported
 GET /settings               {"order": [...7 source ids], "enabled": {id: bool}, "pins": {trackId: id}}, same-origin only
 POST /settings              change any of those (order: every id once; enabled: {id: bool}; pins: {trackId: id|null}),
                             same-origin only, strictly validated; re-picks the clip for the playing track at once
@@ -66,6 +66,17 @@ INDEX_TTL = 3600
 MV = os.path.join(CACHE, "mv")
 MV_ON = os.environ.get("CANVAS_MV", "1") != "0" and shutil.which("yt-dlp") is not None
 LOOP_S, SEAM_S = 8.0, 0.8      # loop length, crossfade at the seam
+
+
+def _env_int(name, default, lo, hi):
+    try:
+        return min(hi, max(lo, int(os.environ.get(name, default))))
+    except ValueError:
+        return default
+
+
+MV_HEIGHT = _env_int("CANVAS_MV_HEIGHT", 1080, 360, 2160)   # tallest music video downloaded from YouTube
+MV_CRF = _env_int("CANVAS_MV_CRF", 20, 14, 35)               # x264 quality of the 8 s loops (lower = sharper, bigger)
 MAX_VIDEO_BYTES = int(os.environ.get("CANVAS_VIDEO_CACHE_MB", "1024")) << 20   # LRU cap for full music videos
 SETTINGS_FILE = os.path.join(CACHE, "settings.json")
 MAX_SETTINGS_BODY = 64 << 10
@@ -365,14 +376,15 @@ def make_loop(src, dest, start):
     """LOOP_S seconds from src, the last SEAM_S crossfaded into the first frame so it loops without a jump.
     Keeps the video's own aspect ratio; the page fits or fills it."""
     L, F = LOOP_S, SEAM_S
-    fc = ("[0:v]scale='min(1280,iw)':'min(1280,ih)':force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2,"
+    cap = MV_HEIGHT * 16 // 9
+    fc = ("[0:v]scale='min(%d,iw)':'min(%d,ih)':force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2,"
           "fps='min(30,source_fps)',split[a][b];[a]trim=%g:%g,setpts=PTS-STARTPTS[m];[b]trim=0:%g,setpts=PTS-STARTPTS[h];"
-          "[m][h]xfade=transition=fade:duration=%g:offset=%g,format=yuv420p" % (F, L + F, F, F, L - F))
+          "[m][h]xfade=transition=fade:duration=%g:offset=%g,format=yuv420p" % (cap, cap, F, L + F, F, F, L - F))
     tmp = dest + ".tmp.mp4"
     try:
         subprocess.run(["nice", "-n", "10", "ffmpeg", "-nostdin", "-v", "error", "-y", "-ss", "%g" % start, "-t",
                         "%g" % (L + F), "-i", src, "-filter_complex", fc, "-an", "-c:v", "libx264", "-preset", "veryfast",
-                        "-crf", "23", "-movflags", "+faststart", tmp], check=True, timeout=300)
+                        "-crf", str(MV_CRF), "-movflags", "+faststart", tmp], check=True, timeout=300)
         os.replace(tmp, dest)
     finally:
         if os.path.exists(tmp):
@@ -402,7 +414,7 @@ def mv_loop(tid, title, artist, duration_ms):
             for vid, dur in mv_candidates(title, artist, duration_ms):
                 a = max(0, int((dur or 180) * 0.35))  # past the intro, usually into the first chorus
                 subprocess.run(["yt-dlp", "-q", "--no-warnings", "-f",
-                                "bv*[height<=720][vcodec^=avc1]/bv*[height<=720]/bv*", "--download-sections",
+                                MV_LOOP_FORMAT, "--download-sections",
                                 "*%d-%d" % (a, a + 14), "-o", os.path.join(tmp, vid + ".%(ext)s"),
                                 "https://www.youtube.com/watch?v=" + vid], check=True, timeout=180, capture_output=True)
                 src = next(os.path.join(tmp, f) for f in os.listdir(tmp) if f.startswith(vid + "."))
@@ -424,8 +436,9 @@ def mv_loop(tid, title, artist, duration_ms):
     return dest if meta["ok"] else None
 
 
-VIDEO_FORMAT = ("bv[height<=720][vcodec^=avc1][ext=mp4]/bv[height<=720][vcodec^=avc1]/bv[height<=720]/"
-                "bv*[height<=720][vcodec^=avc1]/bv*[height<=720]/bv*")
+VIDEO_FORMAT = ("bv[height<=%(h)d][vcodec^=avc1][ext=mp4]/bv[height<=%(h)d][vcodec^=avc1]/bv[height<=%(h)d]/"
+                "bv*[height<=%(h)d][vcodec^=avc1]/bv*[height<=%(h)d]/bv*" % {"h": MV_HEIGHT})
+MV_LOOP_FORMAT = "bv*[height<=%d][vcodec^=avc1]/bv*[height<=%d]/bv*" % (MV_HEIGHT, MV_HEIGHT)
 
 
 def prune_videos():
@@ -443,7 +456,7 @@ def prune_videos():
 
 
 def mv_video(tid, title, artist, duration_ms):
-    """Path of the whole music video (video only, <= 720p), downloading it if needed. None if there is no usable video.
+    """Path of the whole music video (video only, <= MV_HEIGHT), downloading it if needed. None if there is no usable video.
     The page plays it muted, in sync with the song, so it is never cut or looped here."""
     dest, metap = os.path.join(MV, tid + ".full.mp4"), os.path.join(MV, tid + ".full.json")
     if os.path.exists(dest):

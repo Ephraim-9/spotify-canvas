@@ -39,7 +39,7 @@
   #backdrop { opacity: 0; transition: opacity var(--fade) ease; background: center / cover no-repeat;
     filter: blur(48px) brightness(.45) saturate(1.2); transform: scale(1.2); }
   body.fit #backdrop { opacity: 1; }
-  body.fit .layer video { object-fit: contain; }
+  .layer.fitted video { object-fit: contain; }
 
   #shade { position: fixed; left: 0; right: 0; bottom: 0; height: 42vh; pointer-events: none; transition: opacity 400ms ease;
     background: linear-gradient(to bottom, rgba(0,0,0,0) 0%, rgba(0,0,0,.35) 45%, rgba(0,0,0,.78) 100%); }
@@ -151,7 +151,7 @@
   <div id="ctl">
     <button id="info-btn" title="Show title and artist (I)"><svg viewBox="0 0 24 24"><path d="M11 7h2v2h-2zm0 4h2v6h-2zm1-9a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16z"/></svg></button>
     <button id="artist-btn" title="Use another track's clip by the same artist when a track has none (A)" aria-label="Artist's other clips"><svg viewBox="0 0 24 24"><path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm0 2c-2.7 0-8 1.3-8 4v2h16v-2c0-2.7-5.3-4-8-4z"/></svg></button>
-    <button id="fit" title="Fit whole clip / fill screen (C)"><svg viewBox="0 0 24 24"><path d="M19 12h-2v3h-3v2h5v-5zM7 9h3V7H5v5h2V9zm14-6H3a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h18a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zm0 16H3V5h18v14z"/></svg></button>
+    <button id="fit" title="Framing: auto (C)"><svg viewBox="0 0 24 24"><path d="M19 12h-2v3h-3v2h5v-5zM7 9h3V7H5v5h2V9zm14-6H3a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h18a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zm0 16H3V5h18v14z"/></svg></button>
     <span class="spacer"></span>
     <button id="prev" class="mpris" title="Previous (P)"><svg viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6 8.5 6V6z"/></svg></button>
     <button id="play" class="mpris" title="Play/pause (Space)"><svg viewBox="0 0 24 24"><path id="play-path" d="M8 5v14l11-7z"/></svg></button>
@@ -205,10 +205,31 @@ let st = {}, recvAt = 0, layer = null, layerKey = null;
 // ---------- preferences (per browser profile) ----------
 const prefs = (() => { try { return JSON.parse(localStorage.getItem("canvas:prefs")) || {}; } catch { return {}; } })();
 function setPref(k, v) { prefs[k] = v; try { localStorage.setItem("canvas:prefs", JSON.stringify(prefs)); } catch {} applyPrefs(); }
+// Framing: "fill" crops the clip to the screen, "fit" shows all of it over a blurred cover, "auto" (default) fits only
+// when the clip's shape is far from the screen's (a 16:9 video on a portrait monitor) and fills otherwise.
+const FRAMINGS = ["auto", "fit", "fill"], AUTO_FIT_RATIO = 1.5;
+const framing = () => FRAMINGS.includes(prefs.framing) ? prefs.framing : "auto";
+function frame() {
+  const v = layer && layer.querySelector("video");
+  let fit = false;
+  if (v && v.videoWidth && v.videoHeight && innerWidth && innerHeight) {
+    const r = (v.videoWidth / v.videoHeight) / (innerWidth / innerHeight), m = framing();
+    fit = m === "fit" || (m === "auto" && Math.max(r, 1 / r) > AUTO_FIT_RATIO);
+  }
+  if (layer) layer.classList.toggle("fitted", fit);
+  body.classList.toggle("fit", fit);
+}
+addEventListener("resize", frame);
+function cycleFraming() {
+  const n = FRAMINGS[(FRAMINGS.indexOf(framing()) + 1) % FRAMINGS.length];
+  setPref("framing", n); toast("Framing: " + n);
+}
 function applyPrefs() {
-  body.classList.toggle("fit", !!prefs.fit);
   body.classList.toggle("noinfo", !!prefs.noinfo);
-  $("fit").classList.toggle("on", !!prefs.fit);
+  const fr = framing();
+  $("fit").classList.toggle("on", fr !== "auto");
+  $("fit").title = "Framing: " + fr + " (C)";
+  frame();
   $("info-btn").classList.toggle("on", !prefs.noinfo);
   if (st.id) render();
 }
@@ -220,6 +241,7 @@ function show(key, make) {
   layerKey = key;
   const old = layer;
   layer = key ? make() : null;
+  frame();
   if (layer) {
     stage.appendChild(layer);
     const reveal = () => requestAnimationFrame(() => layer && layer.classList.add("on"));
@@ -240,6 +262,7 @@ function videoLayer(src, sync) {
   const v = document.createElement("video");
   Object.assign(v, { muted: true, loop: !sync, playsInline: true, autoplay: !sync && st.playing, preload: "auto", src });
   v.disablePictureInPicture = true;
+  v.addEventListener("loadedmetadata", () => { if (layer === d) frame(); });
   if (sync) {
     d.dataset.sync = "1";
     v.addEventListener("loadedmetadata", () => { v.currentTime = Math.min(position() / 1000, Math.max(0, v.duration - .1)); }, { once: true });
@@ -389,7 +412,7 @@ $("play").onclick = playPause;
 $("next").onclick = () => control("next");
 $("prev").onclick = () => control("previous");
 $("fs").onclick = fullscreen;
-$("fit").onclick = () => setPref("fit", !prefs.fit);
+$("fit").onclick = cycleFraming;
 $("info-btn").onclick = () => setPref("noinfo", !prefs.noinfo);
 $("artist-btn").onclick = toggleArtist;
 $("help-btn").onclick = () => $("help").classList.toggle("show");
@@ -573,7 +596,7 @@ document.addEventListener("keydown", e => {
     " ": playPause, k: playPause, n: () => control("next"), p: () => control("previous"),
     ArrowRight: () => e.shiftKey ? control("next") : seekTo(position() + 10000),
     ArrowLeft: () => e.shiftKey ? control("previous") : seekTo(position() - 10000),
-    f: fullscreen, c: () => setPref("fit", !prefs.fit), i: () => setPref("noinfo", !prefs.noinfo),
+    f: fullscreen, c: cycleFraming, i: () => setPref("noinfo", !prefs.noinfo),
     a: toggleArtist, s: () => openSettings(true), v: () => cyclePin(e.shiftKey), Delete: removeCustom,
     "?": () => $("help").classList.toggle("show"), Escape: () => $("help").classList.remove("show"),
   }[k];
